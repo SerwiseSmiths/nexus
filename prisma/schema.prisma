@@ -1,0 +1,53 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  PROVIDER
+  CUSTOMER
+  ADMIN
+}
+
+model User {
+  id            String         @id @default(uuid())
+  phoneNo       String         @unique
+  email         String?        @unique
+  firstName     String
+  lastName      String
+  role          Role           @default(CUSTOMER)
+  isActive      Boolean        @default(true)
+  isDeleted     Boolean        @default(false)
+  refreshTokens RefreshToken[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([phoneNo])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Otp {
+  id        String   @id @default(uuid())
+  phoneNo   String   @unique
+  otp       String
+  expiresAt DateTime
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([phoneNo])
+}
