@@ -1,5 +1,4 @@
 import winston from 'winston';
-import { config } from '@/configs';
 
 const { combine, timestamp, printf, colorize, errors } = winston.format;
 
@@ -8,7 +7,7 @@ const logFormat = printf(({ level, message, timestamp, stack }) => {
 });
 
 export const logger = winston.createLogger({
-  level: config.logLevel,
+  level: process.env.LOG_LEVEL || 'info',
   format: combine(
     timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
     errors({ stack: true }),
