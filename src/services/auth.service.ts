@@ -86,12 +86,7 @@ export class AuthService {
 
     if (!user) {
       user = await prisma.user.create({
-        data: {
-          phoneNo,
-          role,
-          firstName: "User",
-          lastName: phoneNo.slice(-4),
-        },
+        data: { phoneNo, role },
       });
     }
 

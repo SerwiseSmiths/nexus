@@ -18,12 +18,14 @@ model User {
   id            String         @id @default(uuid())
   phoneNo       String         @unique
   email         String?        @unique
-  firstName     String
-  lastName      String
+  firstName     String   @default("")
+  lastName      String   @default("")
   role          Role           @default(CUSTOMER)
+  avatar        String?
   isActive      Boolean        @default(true)
   isDeleted     Boolean        @default(false)
   refreshTokens RefreshToken[]
+  addresses     Address[]
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
@@ -50,4 +52,27 @@ model Otp {
   createdAt DateTime @default(now())
 
   @@index([phoneNo])
+}
+
+model Address {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id])
+  title          String?
+  houseNo        String
+  societyName    String
+  addressLineOne String?
+  addressLineTwo String?
+  area           String?
+  pinCode        String
+  city           String
+  state          String?
+  country        String   @default("India")
+  latitude       String?
+  longitude      String?
+  isDeleted      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([userId, isDeleted])
 }
