@@ -1,19 +1,15 @@
-import { register } from 'tsconfig-paths';
+import { addAlias } from 'module-alias';
 import path from 'path';
 
-// register() must run before any module that uses @/ aliases is loaded.
-// Static imports are hoisted by esbuild to the top of the file (above this call),
-// so all @/-dependent modules are loaded via require() below instead.
-register({
-  baseUrl: path.join(__dirname, '..'),
-  paths: { '@/*': ['src/*'] },
-});
+// Patches Node's require() globally so @/ resolves to dist/.
+// Runs before any require() that loads @/-aliased modules.
+addAlias('@', path.join(__dirname, '..', 'dist'));
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 require('dotenv/config');
-const { initializeConfig } = require('../src/configs');
-const { initializeCloudinary } = require('../src/configs/cloudinary.config');
-const app = require('../src/app').default;
+const { initializeConfig } = require('../dist/configs');
+const { initializeCloudinary } = require('../dist/configs/cloudinary.config');
+const app = require('../dist/app').default;
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 let initPromise: Promise<void> | null = null;

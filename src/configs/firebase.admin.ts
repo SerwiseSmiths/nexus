@@ -8,20 +8,34 @@ let firebaseAdmin: admin.app.App | null = null;
 export const initializeFirebase = () => {
   if (firebaseAdmin) return firebaseAdmin;
 
-  const serviceAccountPath = path.resolve(process.cwd(), 'serviceAccountKey.json');
+  let serviceAccount: admin.ServiceAccount | null = null;
 
-  if (!fs.existsSync(serviceAccountPath)) {
-    logger.warn('Firebase serviceAccountKey.json not found. Remote Config will be unavailable.');
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    try {
+      serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT) as admin.ServiceAccount;
+    } catch {
+      logger.error('Failed to parse FIREBASE_SERVICE_ACCOUNT env var.');
+    }
+  } else {
+    const serviceAccountPath = path.resolve(process.cwd(), 'serviceAccountKey.json');
+    if (fs.existsSync(serviceAccountPath)) {
+      try {
+        serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8')) as admin.ServiceAccount;
+      } catch {
+        logger.error('Failed to read serviceAccountKey.json.');
+      }
+    }
+  }
+
+  if (!serviceAccount) {
+    logger.warn('Firebase service account not found. Remote Config will be unavailable.');
     return null;
   }
 
   try {
-    const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
-    
     firebaseAdmin = admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
     });
-    
     logger.info('Firebase Admin initialized successfully.');
     return firebaseAdmin;
   } catch (error) {
