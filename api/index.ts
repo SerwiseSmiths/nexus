@@ -1,3 +1,4 @@
+import 'tsconfig-paths/register';
 import 'dotenv/config';
 import { initializeConfig } from '../src/configs';
 import { initializeCloudinary } from '../src/configs/cloudinary.config';
