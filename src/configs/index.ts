@@ -15,6 +15,9 @@ const envSchema = z.object({
   MSG91_WHATSAPP_INTEGRATED_NUMBER: z.string().optional(),
   MSG91_TEMPLATE_NAME: z.string().default('verify'),
   MSG91_TEMPLATE_NAMESPACE: z.string().optional(),
+  CLOUDINARY_CLOUD_NAME: z.string().min(1),
+  CLOUDINARY_API_KEY: z.string().min(1),
+  CLOUDINARY_API_SECRET: z.string().min(1),
 });
 
 export type Config = z.infer<typeof envSchema>;
@@ -67,6 +70,11 @@ export const initializeConfig = async () => {
       integratedNumber: parsed.MSG91_WHATSAPP_INTEGRATED_NUMBER,
       templateName: parsed.MSG91_TEMPLATE_NAME,
       templateNamespace: parsed.MSG91_TEMPLATE_NAMESPACE,
+    },
+    cloudinary: {
+      cloudName: parsed.CLOUDINARY_CLOUD_NAME,
+      apiKey: parsed.CLOUDINARY_API_KEY,
+      apiSecret: parsed.CLOUDINARY_API_SECRET,
     },
   });
 
