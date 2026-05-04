@@ -1,0 +1,78 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  PROVIDER
+  CUSTOMER
+  ADMIN
+}
+
+model User {
+  id            String         @id @default(uuid())
+  phoneNo       String         @unique
+  email         String?        @unique
+  firstName     String   @default("")
+  lastName      String   @default("")
+  role          Role           @default(CUSTOMER)
+  avatar        String?
+  isActive      Boolean        @default(true)
+  isDeleted     Boolean        @default(false)
+  refreshTokens RefreshToken[]
+  addresses     Address[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([phoneNo])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Otp {
+  id        String   @id @default(uuid())
+  phoneNo   String   @unique
+  otp       String
+  expiresAt DateTime
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([phoneNo])
+}
+
+model Address {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id])
+  title          String?
+  houseNo        String
+  societyName    String
+  addressLineOne String?
+  addressLineTwo String?
+  area           String?
+  pinCode        String
+  city           String
+  state          String?
+  country        String   @default("India")
+  latitude       String?
+  longitude      String?
+  isDeleted      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([userId, isDeleted])
+}

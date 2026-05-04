@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs -I {} sh -c 'echo \"=== {} ===\" && grep -E \"\\\\\"name\\\\\"|react|vue|angular|next|vite\" {} | head -3')",
+      "Bash(grep -E \"\\\\.\\(ts|tsx|js\\)$\")",
+      "Bash(npx prisma *)",
+      "Bash(DATABASE_URL=\"postgresql://postgres:root@localhost:5432/nexus?schema=public\" DIRECT_URL=\"postgresql://postgres:root@localhost:5432/nexus?schema=public\" npx prisma migrate dev --name add_address_model)",
+      "Bash(npx tsc *)",
+      "Bash(git -C \"d:/Serwise-bundle/nexus\" status)",
+      "Bash(git -C \"d:/Serwise-bundle/nexus\" branch)"
+    ]
+  }
+}

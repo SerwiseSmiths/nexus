@@ -11,3 +11,31 @@
 
 #!.yarn/cache
 .pnp.*
+node_modules/
+dist/
+build/
+coverage/
+
+# Firebase
+serviceAccountKey.json
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

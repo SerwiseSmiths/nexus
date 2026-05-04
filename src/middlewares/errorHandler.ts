@@ -1,27 +1,17 @@
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '@/utils/logger';
-
-export class AppError extends Error {
-  constructor(public statusCode: number, public message: string) {
-    super(message);
-    Object.setPrototypeOf(this, AppError.prototype);
-  }
-}
+import { ApiResponse, ApiError } from '@/utils/apiResponse';
 
 export const errorHandler = (
-  err: Error | AppError,
+  err: Error | ApiError,
   _req: Request,
   res: Response,
   _next: NextFunction
 ) => {
-  const statusCode = err instanceof AppError ? err.statusCode : 500;
+  const statusCode = err instanceof ApiError ? err.statusCode : 500;
   const message = err.message || 'Internal Server Error';
 
   logger.error(err);
 
-  res.status(statusCode).json({
-    status: 'error',
-    statusCode,
-    message,
-  });
+  return ApiResponse.error(res, statusCode, message, (err as any).data);
 };
