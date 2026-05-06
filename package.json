@@ -60,6 +60,7 @@
     "prettier": "^3.8.2",
     "prisma": "^6.18.0",
     "ts-jest": "^29.4.9",
+    "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
     "typescript": "^6.0.2"
   }
