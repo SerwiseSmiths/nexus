@@ -9,7 +9,11 @@
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "jest",
-    "migrate:deploy:all": "ts-node -r tsconfig-paths/register src/scripts/runMigrations.ts",
+    "migrate:generate": "ts-node -r tsconfig-paths/register src/scripts/generateMigration.ts",
+    "migrate:deploy:local": "ts-node -r tsconfig-paths/register src/scripts/runMigrations.ts local",
+    "migrate:deploy:dev": "ts-node -r tsconfig-paths/register src/scripts/runMigrations.ts development",
+    "migrate:deploy:prod": "ts-node -r tsconfig-paths/register src/scripts/runMigrations.ts production",
+    "migrate:deploy:all": "ts-node -r tsconfig-paths/register src/scripts/runMigrations.ts all",
     "seed:admin:all": "ts-node -r tsconfig-paths/register src/scripts/seedAdmin.ts"
   },
   "_moduleAliases": {

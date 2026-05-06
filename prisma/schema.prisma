@@ -18,8 +18,8 @@ model User {
   id            String         @id @default(uuid())
   phoneNo       String         @unique
   email         String?        @unique
-  firstName     String   @default("")
-  lastName      String   @default("")
+  firstName     String?
+  lastName      String?
   role          Role           @default(CUSTOMER)
   avatar        String?
   isActive      Boolean        @default(true)

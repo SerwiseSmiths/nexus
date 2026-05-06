@@ -29,12 +29,13 @@ const router = Router();
  *         application/json:
  *           schema:
  *             type: object
- *             required: [firstName, lastName]
  *             properties:
  *               firstName:
  *                 type: string
+ *                 nullable: true
  *               lastName:
  *                 type: string
+ *                 nullable: true
  *               avatarUrl:
  *                 type: string
  *     responses:

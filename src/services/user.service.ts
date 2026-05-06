@@ -17,15 +17,11 @@ export class UserService {
   }
 
   static async updateProfile({ userId, firstName, lastName, avatarUrl }: UpdateProfileInput) {
-    if (!firstName?.trim() || !lastName?.trim()) {
-      throw new ApiError(400, 'First name and last name are required');
-    }
-
     const user = await prisma.user.update({
       where: { id: userId, isDeleted: false },
       data: {
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
+        firstName: firstName?.trim() || null,
+        lastName: lastName?.trim() || null,
         ...(avatarUrl && { avatar: avatarUrl }),
       },
     });

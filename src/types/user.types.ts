@@ -4,15 +4,15 @@ export interface UploadAvatarBody {
 }
 
 export interface UpdateProfileBody {
-  firstName: string;
-  lastName: string;
+  firstName: string | null;
+  lastName: string | null;
   avatarUrl?: string;
 }
 
 export interface UpdateProfileInput {
   userId: string;
-  firstName: string;
-  lastName: string;
+  firstName: string | null;
+  lastName: string | null;
   avatarUrl?: string;
 }
 
