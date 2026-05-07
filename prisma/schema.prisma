@@ -64,12 +64,13 @@ model Address {
   addressLineOne String?
   addressLineTwo String?
   area           String?
-  pinCode        String
-  city           String
+  pinCode        String?
+  city           String?
   state          String?
   country        String   @default("India")
   latitude       String?
   longitude      String?
+  directionNote  String?
   isDeleted      Boolean  @default(false)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt

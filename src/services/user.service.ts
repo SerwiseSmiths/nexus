@@ -68,4 +68,31 @@ export class UserService {
     if (!user) throw new ApiError(404, 'User not found');
     return user;
   }
+
+  static async getSelf(userId: string, flags: { address?: boolean }) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId, isDeleted: false },
+      select: {
+        id: true,
+        phoneNo: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        avatar: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+        ...(flags.address && {
+          addresses: {
+            where: { isDeleted: false },
+            orderBy: { createdAt: 'desc' as const },
+          },
+        }),
+      },
+    });
+
+    if (!user) throw new ApiError(404, 'User not found');
+    return user;
+  }
 }

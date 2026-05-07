@@ -5,6 +5,28 @@ import { auth } from '@/middlewares/auth.middleware';
 
 const router = Router();
 
+// ─── Self (full user + optional relations) ───────────────────────────────────
+
+/**
+ * @swagger
+ * /me/self:
+ *   get:
+ *     summary: Get own data with optional relation flags
+ *     tags: [Me]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: address
+ *         schema:
+ *           type: boolean
+ *         description: Include saved addresses
+ *     responses:
+ *       200:
+ *         description: User fetched successfully
+ */
+router.get('/self', auth, UserController.getSelf);
+
 // ─── Profile ─────────────────────────────────────────────────────────────────
 
 /**

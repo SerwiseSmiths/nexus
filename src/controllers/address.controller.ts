@@ -12,12 +12,13 @@ const createSchema = z.object({
   addressLineOne: z.string().optional(),
   addressLineTwo: z.string().optional(),
   area: z.string().optional(),
-  pinCode: z.string().length(6, "Pin code must be 6 digits"),
-  city: z.string().min(1, "City is required"),
+  pinCode: z.string().optional(),
+  city: z.string().optional(),
   state: z.string().optional(),
   country: z.string().optional(),
   latitude: z.string().optional(),
   longitude: z.string().optional(),
+  directionNote: z.string().optional(),
 });
 
 const updateSchema = createSchema.partial();
