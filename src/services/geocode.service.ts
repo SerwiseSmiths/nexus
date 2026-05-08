@@ -1,4 +1,5 @@
 import axios from "axios";
+import { config } from "@/configs";
 
 export interface AddressPrediction {
   placeId: string;
@@ -11,7 +12,7 @@ export interface AddressPrediction {
 }
 
 export const autocompleteAddress = async (input: string): Promise<AddressPrediction[]> => {
-  const apiKey = process.env.OLA_MAPS_API_KEY!;
+  const apiKey = config.olaMapsApiKey;
 
   const response = await axios.get("https://api.olamaps.io/places/v1/autocomplete", {
     params: { input, api_key: apiKey },

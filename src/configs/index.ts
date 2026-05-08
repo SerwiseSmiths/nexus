@@ -18,6 +18,7 @@ const envSchema = z.object({
   CLOUDINARY_CLOUD_NAME: z.string().min(1),
   CLOUDINARY_API_KEY: z.string().min(1),
   CLOUDINARY_API_SECRET: z.string().min(1),
+  OLA_MAPS_API_KEY: z.string().min(1),
 });
 
 export type Config = z.infer<typeof envSchema>;
@@ -76,6 +77,7 @@ export const initializeConfig = async () => {
       apiKey: parsed.CLOUDINARY_API_KEY,
       apiSecret: parsed.CLOUDINARY_API_SECRET,
     },
+    olaMapsApiKey: parsed.OLA_MAPS_API_KEY,
   });
 
   return config;
