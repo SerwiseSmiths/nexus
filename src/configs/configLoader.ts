@@ -38,7 +38,14 @@ export class ConfigLoader {
 
   private static async fetchRemoteConfig() {
     const admin = initializeFirebase();
-    if (!admin) return;
+    if (!admin) {
+      if (this.activeEnv === 'production') {
+        throw new Error(
+          'Firebase Admin failed to initialize. Ensure FIREBASE_SERVICE_ACCOUNT is set in production environment variables.'
+        );
+      }
+      return;
+    }
 
     try {
       logger.info('Fetching Firebase Remote Config...');
@@ -51,6 +58,8 @@ export class ConfigLoader {
         }
       }
       logger.info(`Fetched ${Object.keys(parameters).length} parameters from Remote Config.`);
+      logger.info(`Remote Config keys: [${Object.keys(parameters).join(', ')}]`);
+      logger.info(`DATABASE_URL resolved: ${this.rawPool['DEV_DATABASE_URL'] ? 'DEV_DATABASE_URL ✓' : this.rawPool['DATABASE_URL'] ? 'DATABASE_URL ✓' : 'NOT FOUND ✗'}`);
     } catch (error) {
       logger.error('Failed to fetch Remote Config:', error);
       if (this.activeEnv === 'production') {
