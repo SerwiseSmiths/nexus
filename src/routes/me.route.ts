@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { UserController } from '@/controllers/user.controller';
 import { AddressController } from '@/controllers/address.controller';
+import { SubscriptionController } from '@/controllers/subscription.controller';
 import { auth } from '@/middlewares/auth.middleware';
 
 const router = Router();
@@ -135,6 +136,20 @@ router.post('/avatar', auth, UserController.uploadAvatar);
  *     security:
  *       - bearerAuth: []
  */
+/**
+ * @swagger
+ * /me/active-plan:
+ *   get:
+ *     summary: Get the active subscription plan summary for the hero grid
+ *     tags: [Me]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Active plan summary (hasActivePlan, planName, nextDate)
+ */
+router.get('/active-plan', auth, SubscriptionController.activePlanSummary);
+
 router.get('/addresses', auth, AddressController.getAll);
 router.post('/addresses', auth, AddressController.create);
 router.get('/addresses/:id', auth, AddressController.getOne);

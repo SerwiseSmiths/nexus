@@ -57,4 +57,34 @@ export class AuthController {
       next(error);
     }
   }
+
+  // ── Provider (Radix) auth ─────────────────────────────────────────────────
+
+  static async providerRequestOtp(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { phoneNo } = req.body;
+      if (!phoneNo) {
+        return ApiResponse.error(res, 400, "Phone number is required");
+      }
+
+      await AuthService.providerRequestOtp(phoneNo);
+      return ApiResponse.success(res, 200, "OTP sent successfully");
+    } catch (error: unknown) {
+      next(error);
+    }
+  }
+
+  static async providerVerifyOtp(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { phoneNo, otp } = req.body;
+      if (!phoneNo || !otp) {
+        return ApiResponse.error(res, 400, "Phone number and OTP are required");
+      }
+
+      const result = await AuthService.providerVerifyOtp(phoneNo, otp);
+      return ApiResponse.success(res, 200, "Login successful", result);
+    } catch (error: unknown) {
+      next(error);
+    }
+  }
 }

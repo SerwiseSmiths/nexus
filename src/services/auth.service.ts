@@ -4,6 +4,7 @@ import { config } from "../configs";
 import prisma from "./prisma.service";
 import { sendWhatsAppText } from "./msg91.service";
 import { Role } from "@prisma/client";
+import { ApiError } from "../utils/apiResponse";
 
 const OTP_TTL_MINUTES = 10;
 const OTP_MAX_ATTEMPTS = 5;
@@ -155,5 +156,64 @@ export class AuthService {
 
   static async logout(refreshToken: string) {
     await prisma.refreshToken.deleteMany({ where: { token: refreshToken } });
+  }
+
+  // ── Provider (Radix) auth ─────────────────────────────────────────────────
+  // Only allows existing PROVIDER accounts — never creates a user.
+
+  static async providerRequestOtp(phoneNo: string) {
+    const user = await prisma.user.findUnique({ where: { phoneNo } });
+
+    if (!user || user.isDeleted || !user.isActive) {
+      throw new ApiError(403, "This number is not registered as a professional");
+    }
+
+    if (user.role !== Role.PROVIDER) {
+      throw new ApiError(403, "This number is not registered as a professional");
+    }
+
+    return this.generateOtp(phoneNo);
+  }
+
+  static async providerVerifyOtp(phoneNo: string, otp: string) {
+    const record = await prisma.otp.findUnique({ where: { phoneNo } });
+
+    if (!record) {
+      throw new ApiError(400, "OTP not found or expired");
+    }
+
+    if (record.expiresAt < new Date()) {
+      await prisma.otp.delete({ where: { phoneNo } });
+      throw new ApiError(400, "OTP expired");
+    }
+
+    if (record.attempts >= OTP_MAX_ATTEMPTS) {
+      throw new ApiError(429, "Maximum OTP attempts exceeded");
+    }
+
+    const isMatch =
+      (phoneNo in TEST_PHONES && otp === TEST_PHONES[phoneNo]) ||
+      (await bcrypt.compare(otp, record.otp));
+
+    if (!isMatch) {
+      await prisma.otp.update({
+        where: { phoneNo },
+        data: { attempts: { increment: 1 } },
+      });
+      throw new ApiError(400, "Invalid OTP");
+    }
+
+    await prisma.otp.delete({ where: { phoneNo } });
+
+    // No user creation — provider must already exist
+    const user = await prisma.user.findUnique({ where: { phoneNo } });
+
+    if (!user || user.isDeleted || !user.isActive || user.role !== Role.PROVIDER) {
+      throw new ApiError(403, "Provider account not found");
+    }
+
+    const tokens = await this.generateAuthTokens(user.id, user.phoneNo, user.role);
+
+    return { user, tokens };
   }
 }

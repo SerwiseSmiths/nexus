@@ -19,6 +19,12 @@ const envSchema = z.object({
   CLOUDINARY_API_KEY: z.string().min(1),
   CLOUDINARY_API_SECRET: z.string().min(1),
   OLA_MAPS_API_KEY: z.string().min(1),
+  SUPABASE_URL: z.string().url(),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
+  STRAPI_URL: z.string().url().default('http://localhost:1337'),
+  STRAPI_API_TOKEN: z.string().optional(),
+  RAZORPAY_KEY_ID: z.string().optional(),
+  RAZORPAY_KEY_SECRET: z.string().optional(),
 });
 
 export type Config = z.infer<typeof envSchema>;
@@ -78,6 +84,16 @@ export const initializeConfig = async () => {
       apiSecret: parsed.CLOUDINARY_API_SECRET,
     },
     olaMapsApiKey: parsed.OLA_MAPS_API_KEY,
+    supabase: {
+      url: parsed.SUPABASE_URL,
+      serviceRoleKey: parsed.SUPABASE_SERVICE_ROLE_KEY,
+    },
+    strapiUrl: parsed.STRAPI_URL,
+    strapiApiToken: parsed.STRAPI_API_TOKEN,
+    razorpay: {
+      keyId: parsed.RAZORPAY_KEY_ID,
+      keySecret: parsed.RAZORPAY_KEY_SECRET,
+    },
   });
 
   return config;
