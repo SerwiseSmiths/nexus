@@ -14,10 +14,10 @@ export class DeviceController {
     try {
       const { deviceKey, addressId, imageUrl, metadata } = req.body as AddDeviceBody;
       if (!deviceKey) return ApiResponse.error(res, 400, 'deviceKey is required');
-      if (!metadata) return ApiResponse.error(res, 400, 'metadata is required');
+      if (!metadata)  return ApiResponse.error(res, 400, 'metadata is required');
 
       const device = await DeviceService.addDevice({
-        userId: req.user!.id,
+        userId:    req.user!.id,
         addressId,
         deviceKey: deviceKey as DeviceKey,
         imageUrl,
@@ -33,7 +33,7 @@ export class DeviceController {
   static async getDevices(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const deviceKey = req.query.deviceKey as string | undefined;
-      const devices = await DeviceService.getDevices(req.user!.id, deviceKey);
+      const devices   = await DeviceService.getDevices(req.user!.id, deviceKey);
       return ApiResponse.success(res, 200, 'Devices fetched successfully', { devices });
     } catch (error) {
       next(error);
@@ -42,7 +42,7 @@ export class DeviceController {
 
   static async getDevice(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const device = await DeviceService.getDevice(req.params.id, req.user!.id);
+      const device = await DeviceService.getDevice(req.params.id as string, req.user!.id);
       return ApiResponse.success(res, 200, 'Device fetched successfully', { device });
     } catch (error) {
       next(error);
@@ -53,8 +53,8 @@ export class DeviceController {
     try {
       const { imageUrl, metadata } = req.body as UpdateDeviceBody;
       const device = await DeviceService.updateDevice({
-        deviceId: req.params.id,
-        userId: req.user!.id,
+        deviceId: req.params.id as string,
+        userId:   req.user!.id,
         imageUrl,
         metadata,
       });
@@ -66,7 +66,7 @@ export class DeviceController {
 
   static async deleteDevice(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      await DeviceService.deleteDevice(req.params.id, req.user!.id);
+      await DeviceService.deleteDevice(req.params.id as string, req.user!.id);
       return ApiResponse.success(res, 200, 'Device deleted successfully', null);
     } catch (error) {
       next(error);
@@ -76,12 +76,12 @@ export class DeviceController {
   static async addWorkHistory(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { event, eventDate, notes } = req.body as AddWorkHistoryBody;
-      if (!event) return ApiResponse.error(res, 400, 'event is required');
+      if (!event)     return ApiResponse.error(res, 400, 'event is required');
       if (!eventDate) return ApiResponse.error(res, 400, 'eventDate is required');
 
       const entry = await DeviceService.addWorkHistory({
-        deviceId: req.params.id,
-        userId: req.user!.id,
+        deviceId:  req.params.id as string,
+        userId:    req.user!.id,
         event,
         eventDate,
         notes,
@@ -95,7 +95,7 @@ export class DeviceController {
 
   static async getWorkHistory(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const history = await DeviceService.getWorkHistory(req.params.id, req.user!.id);
+      const history = await DeviceService.getWorkHistory(req.params.id as string, req.user!.id);
       return ApiResponse.success(res, 200, 'Work history fetched successfully', { history });
     } catch (error) {
       next(error);
@@ -104,7 +104,11 @@ export class DeviceController {
 
   static async deleteWorkHistoryEntry(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      await DeviceService.deleteWorkHistoryEntry(req.params.entryId, req.params.id, req.user!.id);
+      await DeviceService.deleteWorkHistoryEntry(
+        req.params.entryId as string,
+        req.params.id      as string,
+        req.user!.id,
+      );
       return ApiResponse.success(res, 200, 'Work history entry deleted successfully', null);
     } catch (error) {
       next(error);

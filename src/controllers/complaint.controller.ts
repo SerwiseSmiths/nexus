@@ -33,7 +33,7 @@ export class ComplaintController {
     }
   }
 
-  static async listComplaints(req: AuthRequest, res: Response, next: NextFunction) {
+  static async listComplaints(_req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const complaints = await ComplaintService.listAll();
       return ApiResponse.success(res, 200, 'Complaints fetched successfully', { complaints });
@@ -62,11 +62,8 @@ export class ComplaintController {
 
   static async getComplaint(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const complaint = await ComplaintService.getById(
-        req.params.id,
-        req.user!.id,
-        req.user!.role,
-      );
+      const id = req.params.id as string;
+      const complaint = await ComplaintService.getById(id, req.user!.id, req.user!.role);
       return ApiResponse.success(res, 200, 'Complaint fetched successfully', { complaint });
     } catch (error) {
       next(error);
@@ -75,7 +72,8 @@ export class ComplaintController {
 
   static async deleteComplaint(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      await ComplaintService.deleteComplaint(req.params.id, req.user!.id, req.user!.role);
+      const id = req.params.id as string;
+      await ComplaintService.deleteComplaint(id, req.user!.id, req.user!.role);
       return ApiResponse.success(res, 200, 'Complaint deleted successfully', null);
     } catch (error) {
       next(error);
@@ -90,7 +88,7 @@ export class ComplaintController {
       if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
 
       const complaint = await ComplaintService.updateStage({
-        complaintId: req.params.id,
+        complaintId: req.params.id as string,
         updatedById: req.user!.id,
         ...parsed.data,
       });
@@ -109,7 +107,7 @@ export class ComplaintController {
       if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
 
       const complaint = await ComplaintService.assignProvider({
-        complaintId: req.params.id,
+        complaintId: req.params.id as string,
         ...parsed.data,
       });
 
@@ -121,7 +119,7 @@ export class ComplaintController {
 
   static async acceptAssignment(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const complaint = await ComplaintService.acceptAssignment(req.params.id, req.user!.id);
+      const complaint = await ComplaintService.acceptAssignment(req.params.id as string, req.user!.id);
       return ApiResponse.success(res, 200, 'Assignment accepted', { complaint });
     } catch (error) {
       next(error);
@@ -130,7 +128,7 @@ export class ComplaintController {
 
   static async rejectAssignment(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const complaint = await ComplaintService.rejectAssignment(req.params.id, req.user!.id);
+      const complaint = await ComplaintService.rejectAssignment(req.params.id as string, req.user!.id);
       return ApiResponse.success(res, 200, 'Assignment rejected', { complaint });
     } catch (error) {
       next(error);
@@ -145,7 +143,7 @@ export class ComplaintController {
       if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
 
       const result = await ComplaintService.addQuote({
-        complaintId: req.params.id,
+        complaintId: req.params.id as string,
         providerId:  req.user!.id,
         ...parsed.data,
       });
@@ -162,7 +160,7 @@ export class ComplaintController {
       if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
 
       const complaint = await ComplaintService.respondToQuote({
-        complaintId: req.params.id,
+        complaintId: req.params.id as string,
         userId:      req.user!.id,
         ...parsed.data,
       });
@@ -181,7 +179,7 @@ export class ComplaintController {
       if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
 
       const complaint = await ComplaintService.linkDevice({
-        complaintId: req.params.id,
+        complaintId: req.params.id as string,
         userId:      req.user!.id,
         ...parsed.data,
       });
@@ -196,7 +194,7 @@ export class ComplaintController {
 
   static async generateEntryQr(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const result = await ComplaintService.generateEntryQr(req.params.id, req.user!.id);
+      const result = await ComplaintService.generateEntryQr(req.params.id as string, req.user!.id);
       return ApiResponse.success(res, 200, 'QR token generated', result);
     } catch (error) {
       next(error);
@@ -209,7 +207,7 @@ export class ComplaintController {
       if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
 
       const complaint = await ComplaintService.validateEntryQr({
-        complaintId: req.params.id,
+        complaintId: req.params.id as string,
         providerId:  req.user!.id,
         ...parsed.data,
       });
@@ -222,7 +220,7 @@ export class ComplaintController {
 
   static async requestEntranceScan(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const result = await ComplaintService.requestEntranceScan(req.params.id, req.user!.id);
+      const result = await ComplaintService.requestEntranceScan(req.params.id as string, req.user!.id);
       return ApiResponse.success(res, 200, result.message, null);
     } catch (error) {
       next(error);
@@ -237,7 +235,7 @@ export class ComplaintController {
       if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
 
       const complaint = await ComplaintService.reopenComplaint({
-        complaintId: req.params.id,
+        complaintId: req.params.id as string,
         userId:      req.user!.id,
         ...parsed.data,
       });
@@ -252,7 +250,7 @@ export class ComplaintController {
 
   static async devAdvanceStage(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const complaint = await ComplaintService.devAdvance(req.params.id);
+      const complaint = await ComplaintService.devAdvance(req.params.id as string);
       return ApiResponse.success(res, 200, 'Stage advanced (dev)', { complaint });
     } catch (error) {
       next(error);

@@ -13,7 +13,7 @@ export class PaymentController {
 
       const result = await PaymentService.createRazorpayOrder({
         amount:  parsed.data.amount,
-        userId:  req.user.id,
+        userId:  req.user!.id,
         purpose: parsed.data.purpose,
         meta:    parsed.data.meta,
       });

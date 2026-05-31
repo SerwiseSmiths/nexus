@@ -31,7 +31,7 @@ export class NotificationController {
 
   static async unregisterDeviceToken(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      await NotificationService.unregisterDeviceToken(req.params.token, req.user!.id);
+      await NotificationService.unregisterDeviceToken(req.params.token as string, req.user!.id);
       return ApiResponse.success(res, 200, 'Device token unregistered', null);
     } catch (error) {
       next(error);
@@ -52,7 +52,7 @@ export class NotificationController {
 
   static async markAsRead(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const notification = await NotificationService.markAsRead(req.params.id, req.user!.id);
+      const notification = await NotificationService.markAsRead(req.params.id as string, req.user!.id);
       return ApiResponse.success(res, 200, 'Notification marked as read', { notification });
     } catch (error) {
       next(error);
@@ -66,8 +66,8 @@ export class NotificationController {
       if (!title)  return ApiResponse.error(res, 400, 'title is required');
       if (!body)   return ApiResponse.error(res, 400, 'body is required');
 
-      const validTypes = Object.values(NotificationType);
-      const resolvedType =
+      const validTypes    = Object.values(NotificationType);
+      const resolvedType  =
         type && validTypes.includes(type as NotificationType)
           ? (type as NotificationType)
           : NotificationType.GENERAL;
