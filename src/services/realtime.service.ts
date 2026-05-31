@@ -145,7 +145,7 @@ export class RealtimeService {
 
   static async emitPaymentVerified(
     userId: string,
-    payload: { subscriptionId: string; ledgerId: string; amount: number },
+    payload: BroadcastPayload,
   ): Promise<void> {
     await this.emitToUser(userId, 'payment:verified', payload);
   }

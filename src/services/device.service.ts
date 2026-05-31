@@ -1,4 +1,4 @@
-import { DeviceType, WorkHistoryEvent } from '@prisma/client';
+import { DeviceType, WorkHistoryEvent, Prisma } from '@prisma/client';
 import prisma from '@/services/prisma.service';
 import { ApiError } from '@/utils/apiResponse';
 import {
@@ -94,7 +94,7 @@ export class DeviceService {
       where: { id: deviceId },
       data: {
         ...(imageUrl !== undefined && { imageUrl }),
-        ...(validatedMeta !== undefined && { metadata: validatedMeta }),
+        ...(validatedMeta !== undefined && { metadata: validatedMeta as Prisma.InputJsonValue }),
       },
     });
   }

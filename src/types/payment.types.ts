@@ -6,7 +6,7 @@ import type { AddonSnapshot } from '@/types/subscription.types';
 export const CreateRazorpayOrderSchema = z.object({
   amount: z.number().int().positive(), // in paise
   purpose: z.string().default('subscription'),
-  meta: z.record(z.unknown()).optional(),
+  meta: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type CreateRazorpayOrderBody = z.infer<typeof CreateRazorpayOrderSchema>;
