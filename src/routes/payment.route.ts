@@ -55,6 +55,38 @@ router.post('/razorpay/order', authenticate, PaymentController.createRazorpayOrd
 
 /**
  * @swagger
+ * /payments/razorpay/webview-complete:
+ *   post:
+ *     summary: Complete a payment made via Razorpay payment link WebView
+ *     tags: [Payment]
+ *     security:
+ *       - bearerAuth: []
+ *     description: >
+ *       Used when API keys are not yet available (pre-approval).
+ *       Client submits the razorpay_payment_id extracted from the WebView success URL.
+ *       Backend fulfils the purchase (subscription / recharge / complaint) and records the ledger entry.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [paymentId, purpose, amountRupees]
+ *             properties:
+ *               paymentId:    { type: string }
+ *               purpose:      { type: string, example: subscription }
+ *               amountRupees: { type: number, example: 399 }
+ *               meta:         { type: object }
+ *     responses:
+ *       200:
+ *         description: Payment processed
+ *       409:
+ *         description: Payment already processed (idempotency)
+ */
+router.post('/razorpay/webview-complete', authenticate, PaymentController.handleWebviewComplete);
+
+/**
+ * @swagger
  * /payments/razorpay/webhook:
  *   post:
  *     summary: Razorpay webhook — verifies signature and fulfils pending payments

@@ -3,7 +3,7 @@ import { AuthRequest } from '@/middlewares/auth.middleware';
 import { Request } from 'express';
 import { PaymentService } from '@/services/payment.service';
 import { ApiResponse } from '@/utils/apiResponse';
-import { CreateRazorpayOrderSchema } from '@/types/payment.types';
+import { CreateRazorpayOrderSchema, WebviewCompleteSchema } from '@/types/payment.types';
 
 export class PaymentController {
   static async createRazorpayOrder(req: AuthRequest, res: Response, next: NextFunction) {
@@ -18,6 +18,21 @@ export class PaymentController {
         meta:    parsed.data.meta,
       });
       return ApiResponse.success(res, 201, 'Razorpay order created', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async handleWebviewComplete(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const parsed = WebviewCompleteSchema.safeParse(req.body);
+      if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
+
+      const result = await PaymentService.webviewComplete({
+        ...parsed.data,
+        userId: req.user!.id,
+      });
+      return ApiResponse.success(res, 200, 'Payment completed', result);
     } catch (error) {
       next(error);
     }

@@ -35,6 +35,24 @@ export type SubscriptionPaymentMeta = {
   startDate:     string;
 };
 
+// ─── WebView (link-based) completion — used before API keys are available ────
+
+export const WebviewCompleteSchema = z.object({
+  paymentId:    z.string().min(1),
+  purpose:      z.string().min(1),
+  amountRupees: z.number().positive(),
+  meta:         z.record(z.string(), z.unknown()).optional(),
+});
+
+export type WebviewCompleteBody  = z.infer<typeof WebviewCompleteSchema>;
+export type WebviewCompleteInput = WebviewCompleteBody & { userId: string };
+
+export type WebviewCompleteResult = {
+  purpose:        string;
+  subscriptionId?: string;
+  walletBalance?:  number;
+};
+
 // ─── Razorpay webhook ─────────────────────────────────────────────────────────
 
 export type RazorpayPaymentEntity = {

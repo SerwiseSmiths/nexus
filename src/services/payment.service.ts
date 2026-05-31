@@ -13,6 +13,8 @@ import type {
   RazorpayOrderResult,
   RazorpayWebhookPayload,
   SubscriptionPaymentMeta,
+  WebviewCompleteInput,
+  WebviewCompleteResult,
 } from '@/types/payment.types';
 
 export class PaymentService {
@@ -62,6 +64,83 @@ export class PaymentService {
     logger.info('[Payment] Razorpay order created', { razorpayOrderId, userId, purpose });
 
     return { orderId: razorpayOrderId, amount: orderAmount, currency, keyId };
+  }
+
+  // ─── WebView (link-based) completion — no API keys required ──────────────
+  // Processes payments made via razorpay.me/@username payment links.
+  // Idempotency: same paymentId can only be fulfilled once.
+
+  static async webviewComplete(input: WebviewCompleteInput): Promise<WebviewCompleteResult> {
+    const { userId, paymentId, purpose, amountRupees, meta } = input;
+
+    // Prevent double-processing the same Razorpay payment
+    const existing = await prisma.paymentOrder.findFirst({
+      where: { razorpayOrderId: paymentId, status: PaymentOrderStatus.CAPTURED, isDeleted: false },
+    });
+    if (existing) throw new ApiError(409, 'This payment has already been processed');
+
+    // Store an audit record — razorpayOrderId holds the payment_id (no order in link flow)
+    await prisma.paymentOrder.create({
+      data: {
+        userId,
+        razorpayOrderId:   paymentId,
+        razorpayPaymentId: paymentId,
+        amount:  Math.round(amountRupees * 100),
+        status:  PaymentOrderStatus.CAPTURED,
+        purpose,
+        meta: (meta ?? {}) as object,
+      },
+    });
+
+    const result: WebviewCompleteResult = { purpose };
+
+    if (purpose === 'subscription') {
+      const m = meta as SubscriptionPaymentMeta;
+      const subscription = await SubscriptionService.purchase({
+        userId,
+        deviceTypeKey: m.deviceTypeKey,
+        planKey:       m.planKey,
+        billingCycle:  m.billingCycle,
+        addons:        m.addons,
+        startDate:     m.startDate,
+      });
+      await WalletService.creditWallet({
+        userId,
+        amount:          amountRupees,
+        source:          WalletLedgerSource.ORDER_PAYMENT,
+        refId:           subscription.id,
+        paymentProvider: PaymentProvider.RAZORPAY,
+        updateBalance:   false, // audit-only — paid via Razorpay link, not wallet
+        meta:            { razorpayPaymentId: paymentId, subscriptionId: subscription.id },
+      });
+      result.subscriptionId = subscription.id;
+
+    } else if (purpose === 'recharge') {
+      const { wallet } = await WalletService.creditWallet({
+        userId,
+        amount:          amountRupees,
+        source:          WalletLedgerSource.RECHARGE,
+        paymentProvider: PaymentProvider.RAZORPAY,
+        updateBalance:   true, // wallet balance actually increases
+        meta:            { razorpayPaymentId: paymentId },
+      });
+      result.walletBalance = wallet.balance;
+
+    } else if (purpose === 'complaint_payment') {
+      const complaintId = (meta as { complaintId?: string })?.complaintId;
+      await WalletService.debitWallet({
+        userId,
+        amount:          amountRupees,
+        source:          WalletLedgerSource.ORDER_PAYMENT,
+        refId:           complaintId,
+        paymentProvider: PaymentProvider.RAZORPAY,
+        updateBalance:   false,
+        meta:            { razorpayPaymentId: paymentId, complaintId },
+      });
+    }
+
+    logger.info('[Payment] WebView payment completed', { userId, paymentId, purpose, amountRupees });
+    return result;
   }
 
   // ─── Webhook: verify signature ────────────────────────────────────────────
