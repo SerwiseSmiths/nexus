@@ -10,6 +10,8 @@ import { WalletService } from '@/services/wallet.service';
 import { RealtimeService } from '@/services/realtime.service';
 import type {
   CreateRazorpayOrderInput,
+  CreatePaymentLinkInput,
+  CreatePaymentLinkResult,
   RazorpayOrderResult,
   RazorpayWebhookPayload,
   SubscriptionPaymentMeta,
@@ -64,6 +66,46 @@ export class PaymentService {
     logger.info('[Payment] Razorpay order created', { razorpayOrderId, userId, purpose });
 
     return { orderId: razorpayOrderId, amount: orderAmount, currency, keyId };
+  }
+
+  // ─── Create Razorpay Payment Link (WebView — real Razorpay URL, no JS injection) ──
+
+  static async createPaymentLink(input: CreatePaymentLinkInput): Promise<CreatePaymentLinkResult> {
+    const { amountRupees, userId, description, userName, userPhone, userEmail } = input;
+    const keyId     = config.razorpay?.keyId;
+    const keySecret = config.razorpay?.keySecret;
+    if (!keyId || !keySecret) throw new ApiError(503, 'Razorpay is not configured');
+
+    const amountPaise = Math.round(amountRupees * 100);
+    // Callback URL the WebView detects to know payment is done
+    const callbackUrl = `${config.appUrl ?? 'https://nexus.dev.serwise.co.in'}/api/payments/razorpay/link-callback`;
+
+    try {
+      const response = await axios.post(
+        'https://api.razorpay.com/v1/payment_links',
+        {
+          amount:          amountPaise,
+          currency:        'INR',
+          description:     description ?? 'Serwise Payment',
+          callback_url:    callbackUrl,
+          callback_method: 'get',
+          expire_by:       Math.floor(Date.now() / 1000) + 1800, // 30-min expiry
+          ...(userName || userPhone || userEmail
+            ? { customer: { name: userName, contact: userPhone, email: userEmail } }
+            : {}),
+        },
+        { auth: { username: keyId, password: keySecret } },
+      );
+
+      const linkId: string = response.data.id;
+      const url:    string = response.data.short_url;
+
+      logger.info('[Payment] Payment link created', { linkId, userId, amountRupees });
+      return { url, linkId };
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { error?: { description?: string } } } };
+      throw new ApiError(502, axiosErr?.response?.data?.error?.description ?? 'Failed to create payment link');
+    }
   }
 
   // ─── WebView (link-based) completion — no API keys required ──────────────

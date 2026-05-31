@@ -87,6 +87,26 @@ router.post('/razorpay/webview-complete', authenticate, PaymentController.handle
 
 /**
  * @swagger
+ * /payments/razorpay/link:
+ *   post:
+ *     summary: Create a Razorpay Payment Link (WebView — real Razorpay URL, amount set server-side)
+ *     tags: [Payment]
+ *     security:
+ *       - bearerAuth: []
+ */
+router.post('/razorpay/link', authenticate, PaymentController.createPaymentLink);
+
+/**
+ * @swagger
+ * /payments/razorpay/link-callback:
+ *   get:
+ *     summary: Razorpay payment link callback — WebView detects this URL for success/failure
+ *     tags: [Payment]
+ */
+router.get('/razorpay/link-callback', PaymentController.handleLinkCallback);
+
+/**
+ * @swagger
  * /payments/razorpay/webhook:
  *   post:
  *     summary: Razorpay webhook — verifies signature and fulfils pending payments

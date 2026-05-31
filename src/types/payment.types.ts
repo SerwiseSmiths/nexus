@@ -35,6 +35,23 @@ export type SubscriptionPaymentMeta = {
   startDate:     string;
 };
 
+// ─── Payment Link (WebView) — dynamic link with exact amount, no JS injection ─
+
+export const CreatePaymentLinkSchema = z.object({
+  amountRupees: z.number().positive(),
+  purpose:      z.string().min(1),
+  meta:         z.record(z.string(), z.unknown()).optional(),
+  description:  z.string().optional(),
+});
+
+export type CreatePaymentLinkBody  = z.infer<typeof CreatePaymentLinkSchema>;
+export type CreatePaymentLinkInput = CreatePaymentLinkBody & { userId: string; userName?: string; userPhone?: string; userEmail?: string };
+
+export type CreatePaymentLinkResult = {
+  url:    string; // short_url to load in WebView
+  linkId: string; // plink_xxx — used for idempotency
+};
+
 // ─── WebView (link-based) completion — used before API keys are available ────
 
 export const WebviewCompleteSchema = z.object({
