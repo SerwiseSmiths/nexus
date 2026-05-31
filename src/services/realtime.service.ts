@@ -140,4 +140,13 @@ export class RealtimeService {
       token,
     });
   }
+
+  // ─── Payment events ───────────────────────────────────────────────────────
+
+  static async emitPaymentVerified(
+    userId: string,
+    payload: { subscriptionId: string; ledgerId: string; amount: number },
+  ): Promise<void> {
+    await this.emitToUser(userId, 'payment:verified', payload);
+  }
 }

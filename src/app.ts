@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
@@ -10,13 +10,29 @@ import routes from '@/routes';
 import { errorHandler } from '@/middlewares/errorHandler';
 import { contextMiddleware } from '@/middlewares/context.middleware';
 
+// Augment Express Request to carry raw body for webhook signature verification
+declare global {
+  namespace Express {
+    interface Request {
+      rawBody?: Buffer;
+    }
+  }
+}
+
 const app = express();
 
 // Middlewares
 app.use(helmet());
 app.use(morgan('dev'));
 app.use(cors({ origin: config.cors.origin }));
-app.use(express.json());
+// Capture raw body before JSON parsing so Razorpay webhook signatures can be verified
+app.use(
+  express.json({
+    verify: (req: Request, _res, buf) => {
+      req.rawBody = buf;
+    },
+  }),
+);
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(contextMiddleware);

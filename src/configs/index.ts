@@ -25,6 +25,7 @@ const envSchema = z.object({
   STRAPI_API_TOKEN: z.string().optional(),
   RAZORPAY_KEY_ID: z.string().optional(),
   RAZORPAY_KEY_SECRET: z.string().optional(),
+  RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
 });
 
 export type Config = z.infer<typeof envSchema>;
@@ -93,6 +94,7 @@ export const initializeConfig = async () => {
     razorpay: {
       keyId: parsed.RAZORPAY_KEY_ID,
       keySecret: parsed.RAZORPAY_KEY_SECRET,
+      webhookSecret: parsed.RAZORPAY_WEBHOOK_SECRET,
     },
   });
 

@@ -71,6 +71,20 @@ enum WalletLedgerSource {
   TRANSFER
 }
 
+enum PaymentProvider {
+  RAZORPAY
+  ADMIN
+  CASH
+}
+
+// ─── Payment Enums ────────────────────────────────────────────────────────────
+
+enum PaymentOrderStatus {
+  PENDING
+  CAPTURED
+  FAILED
+}
+
 // ─── Notification Enums ───────────────────────────────────────────────────────
 
 enum NotificationType {
@@ -127,6 +141,8 @@ model User {
   // Wallet relations
   wallet         Wallet?
   walletLedger   WalletLedger[]
+  // Payment relations
+  paymentOrders  PaymentOrder[]
   // Subscription relations
   subscriptions  Subscription[]
   createdAt     DateTime       @default(now())
@@ -345,21 +361,25 @@ model Wallet {
 }
 
 model WalletLedger {
-  id             String             @id @default(uuid())
-  walletId       String
-  wallet         Wallet             @relation(fields: [walletId], references: [id])
-  userId         String
-  user           User               @relation(fields: [userId], references: [id])
-  type           WalletLedgerType
-  source         WalletLedgerSource
-  amount         Float
-  openingBalance Float
-  closingBalance Float
-  refId          String?
-  meta           Json?
-  isDeleted      Boolean            @default(false)
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
+  id              String             @id @default(uuid())
+  walletId        String
+  wallet          Wallet             @relation(fields: [walletId], references: [id])
+  userId          String
+  user            User               @relation(fields: [userId], references: [id])
+  type            WalletLedgerType
+  source          WalletLedgerSource
+  amount          Float
+  openingBalance  Float
+  closingBalance  Float
+  refId           String?
+  meta            Json?
+  // payment_provider: tracks which payment channel originated this entry
+  paymentProvider PaymentProvider?
+  // updateBalance: false means the entry is audit-only — wallet.balance was NOT changed
+  updateBalance   Boolean            @default(true)
+  isDeleted       Boolean            @default(false)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
 
   @@index([walletId, createdAt(sort: Desc)])
   @@index([userId, createdAt(sort: Desc)])
@@ -377,6 +397,29 @@ model DeviceToken {
 
   @@index([userId])
   @@index([token])
+}
+
+// ─── Payment Order Model ──────────────────────────────────────────────────────
+
+model PaymentOrder {
+  id                String             @id @default(uuid())
+  userId            String
+  user              User               @relation(fields: [userId], references: [id])
+  razorpayOrderId   String             @unique
+  amount            Int                // in paise
+  status            PaymentOrderStatus @default(PENDING)
+  // purpose: "subscription" | "recharge" — drives fulfilment logic in webhook
+  purpose           String
+  // meta: snapshot of all data needed to fulfill the purpose after capture
+  meta              Json
+  razorpayPaymentId String?            // populated after successful capture
+  isDeleted         Boolean            @default(false)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@index([userId, isDeleted])
+  @@index([razorpayOrderId])
+  @@index([status])
 }
 
 // ─── Subscription Models ──────────────────────────────────────────────────────

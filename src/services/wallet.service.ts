@@ -24,38 +24,50 @@ export class WalletService {
   }
 
   static async creditWallet(input: CreditWalletInput) {
-    const { userId, amount, source, refId, meta } = input;
+    const {
+      userId,
+      amount,
+      source,
+      refId,
+      meta,
+      paymentProvider,
+      updateBalance = true, // default: actually credit the wallet
+    } = input;
 
     if (amount <= 0) throw new ApiError(400, 'Amount must be greater than 0');
 
     return prisma.$transaction(async (tx) => {
       const wallet = await tx.wallet.upsert({
-        where: { userId },
+        where:  { userId },
         create: { userId },
         update: {},
       });
 
       if (!wallet.isActive) throw new ApiError(403, 'Wallet is inactive');
 
-      const openingBalance = wallet.balance;
-      const closingBalance = openingBalance + amount;
+      const openingBalance  = wallet.balance;
+      const closingBalance  = updateBalance ? openingBalance + amount : openingBalance;
 
       const [updatedWallet, ledger] = await Promise.all([
-        tx.wallet.update({
-          where: { id: wallet.id },
-          data: { balance: closingBalance },
-        }),
+        updateBalance
+          ? tx.wallet.update({
+              where: { id: wallet.id },
+              data:  { balance: closingBalance },
+            })
+          : Promise.resolve(wallet),
         tx.walletLedger.create({
           data: {
-            walletId: wallet.id,
+            walletId:       wallet.id,
             userId,
-            type: WalletLedgerType.CREDIT,
+            type:           WalletLedgerType.CREDIT,
             source,
             amount,
             openingBalance,
             closingBalance,
-            ...(refId && { refId }),
-            ...(meta && { meta: meta as Prisma.InputJsonValue }),
+            updateBalance,
+            ...(refId           && { refId }),
+            ...(meta            && { meta: meta as Prisma.InputJsonValue }),
+            ...(paymentProvider && { paymentProvider }),
           },
         }),
       ]);
@@ -65,7 +77,15 @@ export class WalletService {
   }
 
   static async debitWallet(input: DebitWalletInput) {
-    const { userId, amount, source, refId, meta } = input;
+    const {
+      userId,
+      amount,
+      source,
+      refId,
+      meta,
+      paymentProvider,
+      updateBalance = true,
+    } = input;
 
     if (amount <= 0) throw new ApiError(400, 'Amount must be greater than 0');
 
@@ -76,29 +96,37 @@ export class WalletService {
         if (!wallet) throw new ApiError(404, 'Wallet not found');
         if (!wallet.isActive) throw new ApiError(403, 'Wallet is inactive');
 
-        if (source !== WalletLedgerSource.ORDER_PAYMENT && wallet.balance < amount) {
+        if (
+          updateBalance &&
+          source !== WalletLedgerSource.ORDER_PAYMENT &&
+          wallet.balance < amount
+        ) {
           throw new ApiError(400, 'Insufficient wallet balance');
         }
 
         const openingBalance = wallet.balance;
-        const closingBalance = openingBalance - amount;
+        const closingBalance = updateBalance ? openingBalance - amount : openingBalance;
 
         const [updatedWallet, ledger] = await Promise.all([
-          tx.wallet.update({
-            where: { id: wallet.id },
-            data: { balance: closingBalance },
-          }),
+          updateBalance
+            ? tx.wallet.update({
+                where: { id: wallet.id },
+                data:  { balance: closingBalance },
+              })
+            : Promise.resolve(wallet),
           tx.walletLedger.create({
             data: {
-              walletId: wallet.id,
+              walletId:       wallet.id,
               userId,
-              type: WalletLedgerType.DEBIT,
+              type:           WalletLedgerType.DEBIT,
               source,
               amount,
               openingBalance,
               closingBalance,
-              ...(refId && { refId }),
-              ...(meta && { meta: meta as Prisma.InputJsonValue }),
+              updateBalance,
+              ...(refId           && { refId }),
+              ...(meta            && { meta: meta as Prisma.InputJsonValue }),
+              ...(paymentProvider && { paymentProvider }),
             },
           }),
         ]);
@@ -115,10 +143,10 @@ export class WalletService {
 
     const [entries, total] = await Promise.all([
       prisma.walletLedger.findMany({
-        where: { userId, isDeleted: false },
+        where:   { userId, isDeleted: false },
         orderBy: { createdAt: 'desc' },
         skip,
-        take: limit,
+        take:    limit,
       }),
       prisma.walletLedger.count({ where: { userId, isDeleted: false } }),
     ]);
