@@ -142,7 +142,8 @@ model User {
   wallet         Wallet?
   walletLedger   WalletLedger[]
   // Payment relations
-  paymentOrders  PaymentOrder[]
+  paymentOrders   PaymentOrder[]
+  paymentSessions PaymentSession[]
   // Subscription relations
   subscriptions  Subscription[]
   createdAt     DateTime       @default(now())
@@ -420,6 +421,34 @@ model PaymentOrder {
   @@index([userId, isDeleted])
   @@index([razorpayOrderId])
   @@index([status])
+}
+
+// ─── Payment Session Model ────────────────────────────────────────────────────
+// Created before the WebView opens; webhook matches by phone + amount.
+
+enum PaymentSessionStatus {
+  PENDING
+  FULFILLED
+  EXPIRED
+}
+
+model PaymentSession {
+  id                  String               @id @default(uuid())
+  userId              String
+  user                User                 @relation(fields: [userId], references: [id])
+  phone               String               // user's phone, matched against webhook contact field
+  purpose             String               // subscription | recharge | complaint_payment
+  expectedAmountPaise Int                  // amount in paise, verified against webhook payload
+  meta                Json                 // subscription details, addon list, etc.
+  status              PaymentSessionStatus @default(PENDING)
+  expiresAt           DateTime             // 30-minute window
+  isDeleted           Boolean              @default(false)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  @@index([phone, status])
+  @@index([userId, status])
+  @@index([expiresAt])
 }
 
 // ─── Subscription Models ──────────────────────────────────────────────────────

@@ -3,7 +3,12 @@ import { AuthRequest } from '@/middlewares/auth.middleware';
 import { Request } from 'express';
 import { PaymentService } from '@/services/payment.service';
 import { ApiResponse } from '@/utils/apiResponse';
-import { CreateRazorpayOrderSchema, CreatePaymentLinkSchema, WebviewCompleteSchema } from '@/types/payment.types';
+import {
+  CreateRazorpayOrderSchema,
+  CreatePaymentLinkSchema,
+  CreatePaymentSessionSchema,
+  WebviewCompleteSchema,
+} from '@/types/payment.types';
 
 export class PaymentController {
   static async createRazorpayOrder(req: AuthRequest, res: Response, next: NextFunction) {
@@ -18,6 +23,23 @@ export class PaymentController {
         meta:    parsed.data.meta,
       });
       return ApiResponse.success(res, 201, 'Razorpay order created', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // Create a payment session before opening the WebView (no API keys needed)
+  static async createPaymentSession(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const parsed = CreatePaymentSessionSchema.safeParse(req.body);
+      if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
+
+      const result = await PaymentService.createPaymentSession({
+        ...parsed.data,
+        userId: req.user!.id,
+        phone:  req.user!.phoneNo,
+      });
+      return ApiResponse.success(res, 201, 'Payment session created', result);
     } catch (error) {
       next(error);
     }

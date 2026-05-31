@@ -35,6 +35,21 @@ export type SubscriptionPaymentMeta = {
   startDate:     string;
 };
 
+// ─── Payment Session — created before WebView opens, matched by webhook ──────
+
+export const CreatePaymentSessionSchema = z.object({
+  amountRupees: z.number().positive(),
+  purpose:      z.string().min(1),
+  meta:         z.record(z.string(), z.unknown()).optional(),
+});
+
+export type CreatePaymentSessionBody  = z.infer<typeof CreatePaymentSessionSchema>;
+export type CreatePaymentSessionInput = CreatePaymentSessionBody & { userId: string; phone: string };
+
+export type CreatePaymentSessionResult = {
+  sessionId: string;
+};
+
 // ─── Payment Link (WebView) — dynamic link with exact amount, no JS injection ─
 
 export const CreatePaymentLinkSchema = z.object({
@@ -73,11 +88,12 @@ export type WebviewCompleteResult = {
 // ─── Razorpay webhook ─────────────────────────────────────────────────────────
 
 export type RazorpayPaymentEntity = {
-  id:        string;
-  order_id:  string;
-  amount:    number;
-  currency:  string;
-  status:    string;
+  id:       string;
+  order_id: string | null; // null for payment-link payments (no order created)
+  amount:   number;        // in paise
+  currency: string;
+  status:   string;
+  contact:  string | null; // user's phone number — used to match PaymentSession
 };
 
 export type RazorpayWebhookPayload = {

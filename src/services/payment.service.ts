@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import axios from 'axios';
-import { PaymentOrderStatus, WalletLedgerSource, PaymentProvider } from '@prisma/client';
+import { PaymentOrderStatus, PaymentSessionStatus, WalletLedgerSource, PaymentProvider } from '@prisma/client';
 import { config } from '@/configs';
 import { ApiError } from '@/utils/apiResponse';
 import { logger } from '@/utils/logger';
@@ -12,6 +12,8 @@ import type {
   CreateRazorpayOrderInput,
   CreatePaymentLinkInput,
   CreatePaymentLinkResult,
+  CreatePaymentSessionInput,
+  CreatePaymentSessionResult,
   RazorpayOrderResult,
   RazorpayWebhookPayload,
   SubscriptionPaymentMeta,
@@ -20,6 +22,34 @@ import type {
 } from '@/types/payment.types';
 
 export class PaymentService {
+  // ─── Create Payment Session (no API keys required) ─────────────────────────
+  // Must be called before opening the WebView. The webhook handler matches
+  // the incoming payment to this session via phone number + amount.
+
+  static async createPaymentSession(
+    input: CreatePaymentSessionInput,
+  ): Promise<CreatePaymentSessionResult> {
+    const { userId, phone, purpose, amountRupees, meta } = input;
+    const expectedAmountPaise = Math.round(amountRupees * 100);
+
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30-min window
+
+    const session = await prisma.paymentSession.create({
+      data: {
+        userId,
+        phone: phone.replace(/\s+/g, ''), // normalise whitespace
+        purpose,
+        expectedAmountPaise,
+        meta: (meta ?? {}) as object,
+        status:    PaymentSessionStatus.PENDING,
+        expiresAt,
+      },
+    });
+
+    logger.info('[Payment] Session created', { sessionId: session.id, userId, purpose });
+    return { sessionId: session.id };
+  }
+
   // ─── Create Razorpay order + persist PaymentOrder record ──────────────────
 
   static async createRazorpayOrder(
@@ -211,43 +241,96 @@ export class PaymentService {
       const payment = event.payload.payment?.entity;
       if (!payment) return;
 
-      const { id: razorpayPaymentId, order_id: razorpayOrderId } = payment;
+      const { id: razorpayPaymentId, order_id: razorpayOrderId, amount, contact } = payment;
 
-      const paymentOrder = await prisma.paymentOrder.findFirst({
-        where: { razorpayOrderId, status: PaymentOrderStatus.PENDING, isDeleted: false },
-      });
+      logger.info('[Webhook] Payment event received', { razorpayPaymentId, razorpayOrderId, amount, contact });
 
-      if (!paymentOrder) {
-        logger.warn('[Webhook] No pending PaymentOrder for Razorpay order', { razorpayOrderId });
+      // ── Path A: order-based payment (API keys were used) ─────────────────────
+      if (razorpayOrderId) {
+        const paymentOrder = await prisma.paymentOrder.findFirst({
+          where: { razorpayOrderId, status: PaymentOrderStatus.PENDING, isDeleted: false },
+        });
+
+        if (!paymentOrder) {
+          logger.warn('[Webhook] No pending PaymentOrder for order', { razorpayOrderId });
+          return;
+        }
+
+        try {
+          if (paymentOrder.purpose === 'subscription') {
+            await PaymentService.fulfillSubscription(paymentOrder, razorpayPaymentId);
+          } else if (paymentOrder.purpose === 'recharge') {
+            await PaymentService.fulfillRecharge(paymentOrder, razorpayPaymentId);
+          } else if (paymentOrder.purpose === 'complaint_payment') {
+            await PaymentService.fulfillComplaintPayment(paymentOrder, razorpayPaymentId);
+          }
+          await prisma.paymentOrder.update({
+            where: { id: paymentOrder.id },
+            data:  { status: PaymentOrderStatus.CAPTURED, razorpayPaymentId },
+          });
+        } catch (err) {
+          await prisma.paymentOrder.update({
+            where: { id: paymentOrder.id },
+            data:  { status: PaymentOrderStatus.FAILED },
+          });
+          throw err;
+        }
         return;
       }
 
-      logger.info('[Webhook] Processing payment capture', {
-        razorpayOrderId,
-        razorpayPaymentId,
-        purpose: paymentOrder.purpose,
-        userId:  paymentOrder.userId,
+      // ── Path B: payment-link WebView (no order ID) ────────────────────────────
+      // Match by phone number + amount against a pending PaymentSession.
+      if (!contact) {
+        logger.warn('[Webhook] No contact in payment payload, cannot match session');
+        return;
+      }
+
+      const normalizedPhone = contact.replace(/\s+/g, '');
+
+      const session = await prisma.paymentSession.findFirst({
+        where: {
+          phone:               normalizedPhone,
+          expectedAmountPaise: amount,
+          status:              PaymentSessionStatus.PENDING,
+          isDeleted:           false,
+          expiresAt:           { gt: new Date() },
+        },
+        orderBy: { createdAt: 'desc' }, // most recent session wins
+      });
+
+      if (!session) {
+        logger.warn('[Webhook] No matching PaymentSession', { phone: normalizedPhone, amount });
+        return;
+      }
+
+      logger.info('[Webhook] Session matched, fulfilling', {
+        sessionId: session.id,
+        userId:    session.userId,
+        purpose:   session.purpose,
       });
 
       try {
-        if (paymentOrder.purpose === 'subscription') {
-          await PaymentService.fulfillSubscription(paymentOrder, razorpayPaymentId);
-        } else if (paymentOrder.purpose === 'recharge') {
-          await PaymentService.fulfillRecharge(paymentOrder, razorpayPaymentId);
-        } else if (paymentOrder.purpose === 'complaint_payment') {
-          await PaymentService.fulfillComplaintPayment(paymentOrder, razorpayPaymentId);
+        const orderProxy = {
+          id:     session.id,
+          userId: session.userId,
+          amount: session.expectedAmountPaise,
+          meta:   session.meta,
+        };
+
+        if (session.purpose === 'subscription') {
+          await PaymentService.fulfillSubscription(orderProxy, razorpayPaymentId);
+        } else if (session.purpose === 'recharge') {
+          await PaymentService.fulfillRecharge(orderProxy, razorpayPaymentId);
+        } else if (session.purpose === 'complaint_payment') {
+          await PaymentService.fulfillComplaintPayment(orderProxy, razorpayPaymentId);
         }
 
-        await prisma.paymentOrder.update({
-          where: { id: paymentOrder.id },
-          data:  { status: PaymentOrderStatus.CAPTURED, razorpayPaymentId },
+        await prisma.paymentSession.update({
+          where: { id: session.id },
+          data:  { status: PaymentSessionStatus.FULFILLED },
         });
       } catch (err) {
-        await prisma.paymentOrder.update({
-          where: { id: paymentOrder.id },
-          data:  { status: PaymentOrderStatus.FAILED },
-        });
-        logger.error('[Webhook] Fulfillment failed', { error: err, razorpayOrderId });
+        logger.error('[Webhook] Session fulfillment failed', { error: err, sessionId: session.id });
         throw err;
       }
     }

@@ -55,6 +55,20 @@ router.post('/razorpay/order', authenticate, PaymentController.createRazorpayOrd
 
 /**
  * @swagger
+ * /payments/razorpay/session:
+ *   post:
+ *     summary: Create a payment session before opening the Razorpay WebView
+ *     tags: [Payment]
+ *     security:
+ *       - bearerAuth: []
+ *     description: >
+ *       No API keys required. Stores user intent (purpose + amount + meta) so the
+ *       webhook handler can match the incoming payment to the right user by phone number.
+ */
+router.post('/razorpay/session', authenticate, PaymentController.createPaymentSession);
+
+/**
+ * @swagger
  * /payments/razorpay/webview-complete:
  *   post:
  *     summary: Complete a payment made via Razorpay payment link WebView
