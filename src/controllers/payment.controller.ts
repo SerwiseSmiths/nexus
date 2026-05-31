@@ -28,13 +28,10 @@ export class PaymentController {
       const parsed = CreatePaymentLinkSchema.safeParse(req.body);
       if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
 
-      const profile = req.user!;
       const result = await PaymentService.createPaymentLink({
         ...parsed.data,
-        userId:    profile.id,
-        userName:  [profile.firstName, profile.lastName].filter(Boolean).join(' ') || undefined,
-        userPhone: profile.phoneNo,
-        userEmail: profile.email ?? undefined,
+        userId:    req.user!.id,
+        userPhone: req.user!.phoneNo,
       });
       return ApiResponse.success(res, 201, 'Payment link created', result);
     } catch (error) {
