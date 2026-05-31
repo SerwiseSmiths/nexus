@@ -42,6 +42,15 @@ export class StrapiService {
     return h;
   }
 
+  static async ping(): Promise<void> {
+    try {
+      await fetch(`${this.baseUrl}/_health`);
+      logger.info('[Strapi] CMS warmup ping succeeded');
+    } catch {
+      logger.warn('[Strapi] CMS warmup ping failed — CMS may be slow on first request');
+    }
+  }
+
   private static async gql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
     let res: Response;
     try {
