@@ -1,5 +1,4 @@
 import { Response, NextFunction } from 'express';
-import { Role } from '@prisma/client';
 import { AuthRequest } from '@/middlewares/auth.middleware';
 import { ComplaintService } from '@/services/complaint.service';
 import { ApiResponse } from '@/utils/apiResponse';
