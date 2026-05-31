@@ -9,6 +9,7 @@ import { swaggerSpec } from '@/configs/swagger';
 import routes from '@/routes';
 import { errorHandler } from '@/middlewares/errorHandler';
 import { contextMiddleware } from '@/middlewares/context.middleware';
+import { requestLogger } from '@/middlewares/requestLogger.middleware';
 
 // Augment Express Request to carry raw body for webhook signature verification
 declare global {
@@ -35,6 +36,7 @@ app.use(
 );
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+app.use(requestLogger);
 app.use(contextMiddleware);
 
 // Documentation
