@@ -7,8 +7,8 @@ import type { AuthRequest } from '@/middlewares/auth.middleware';
 
 const creditDebitSchema = z.object({
   userId:  z.string().uuid('Invalid userId'),
-  amount:  z.number({ invalid_type_error: 'Amount must be a number' }).positive('Amount must be positive'),
-  source:  z.nativeEnum(WalletLedgerSource, { errorMap: () => ({ message: 'Invalid source' }) }),
+  amount:  z.number({ error: 'Amount must be a number' }).positive('Amount must be positive'),
+  source:  z.nativeEnum(WalletLedgerSource, { error: 'Invalid source' }),
   refId:   z.string().optional(),
   meta:    z.record(z.string(), z.unknown()).optional(),
 });
@@ -25,7 +25,7 @@ export class WalletController {
 
   static async getWalletByUserId(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { userId } = req.params;
+      const userId = req.params.userId as string;
       if (!userId) throw new ApiError(400, 'userId is required');
       const wallet = await WalletService.getWalletByUserId(userId);
       ApiResponse.success(res, 200, 'Wallet fetched successfully', wallet);
