@@ -5,6 +5,11 @@ import { ApiError, ApiResponse } from '@/utils/apiResponse';
 import { WalletService } from '@/services/wallet.service';
 import type { AuthRequest } from '@/middlewares/auth.middleware';
 
+const sendMoneySchema = z.object({
+  recipientPhone: z.string().min(10, 'Invalid phone number'),
+  amount:         z.number({ error: 'Amount must be a number' }).positive('Amount must be positive'),
+});
+
 const creditDebitSchema = z.object({
   userId:  z.string().uuid('Invalid userId'),
   amount:  z.number({ error: 'Amount must be a number' }).positive('Amount must be positive'),
@@ -53,6 +58,22 @@ export class WalletController {
 
       const result = await WalletService.debitWallet(parsed.data);
       ApiResponse.success(res, 200, 'Wallet debited successfully', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async sendMoney(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const parsed = sendMoneySchema.safeParse(req.body);
+      if (!parsed.success) throw new ApiError(400, 'Validation failed', parsed.error.flatten());
+
+      const result = await WalletService.sendMoney({
+        senderUserId:   req.user!.id,
+        recipientPhone: parsed.data.recipientPhone,
+        amount:         parsed.data.amount,
+      });
+      ApiResponse.success(res, 200, 'Money sent successfully', result);
     } catch (error) {
       next(error);
     }

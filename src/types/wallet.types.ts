@@ -29,3 +29,14 @@ export interface GetWalletHistoryInput {
   page:   number;
   limit:  number;
 }
+
+export interface SendMoneyBody {
+  recipientPhone: string;
+  amount:         number;
+}
+
+export interface SendMoneyInput {
+  senderUserId:   string;
+  recipientPhone: string;
+  amount:         number;
+}

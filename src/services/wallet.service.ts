@@ -2,7 +2,7 @@ import { Prisma, WalletLedgerSource, WalletLedgerType } from '@prisma/client';
 import prisma from '@/services/prisma.service';
 import { ApiError } from '@/utils/apiResponse';
 import { logger } from '@/utils/logger';
-import type { CreditWalletInput, DebitWalletInput, GetWalletHistoryInput } from '@/types/wallet.types';
+import type { CreditWalletInput, DebitWalletInput, GetWalletHistoryInput, SendMoneyInput } from '@/types/wallet.types';
 
 export class WalletService {
   static async getOrCreateWallet(userId: string) {
@@ -132,6 +132,73 @@ export class WalletService {
         ]);
 
         return { wallet: updatedWallet, ledger };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  static async sendMoney(input: SendMoneyInput) {
+    const { senderUserId, recipientPhone, amount } = input;
+
+    if (amount <= 0) throw new ApiError(400, 'Amount must be greater than 0');
+
+    return prisma.$transaction(
+      async (tx) => {
+        const recipient = await tx.user.findUnique({
+          where: { phoneNo: recipientPhone, isDeleted: false },
+        });
+        if (!recipient) throw new ApiError(404, 'Recipient not found');
+        if (recipient.id === senderUserId) throw new ApiError(400, 'Cannot send money to yourself');
+
+        const [senderWallet, recipientWallet] = await Promise.all([
+          tx.wallet.findUnique({ where: { userId: senderUserId, isDeleted: false } }),
+          tx.wallet.upsert({
+            where:  { userId: recipient.id },
+            create: { userId: recipient.id },
+            update: {},
+          }),
+        ]);
+
+        if (!senderWallet)           throw new ApiError(404, 'Sender wallet not found');
+        if (!senderWallet.isActive)  throw new ApiError(403, 'Your wallet is inactive');
+        if (!recipientWallet.isActive) throw new ApiError(403, 'Recipient wallet is inactive');
+        if (senderWallet.balance < amount) throw new ApiError(400, 'Insufficient wallet balance');
+
+        const senderOpening    = senderWallet.balance;
+        const senderClosing    = senderOpening - amount;
+        const recipientOpening = recipientWallet.balance;
+        const recipientClosing = recipientOpening + amount;
+
+        await Promise.all([
+          tx.wallet.update({ where: { id: senderWallet.id },    data: { balance: senderClosing } }),
+          tx.wallet.update({ where: { id: recipientWallet.id }, data: { balance: recipientClosing } }),
+          tx.walletLedger.create({
+            data: {
+              walletId:       senderWallet.id,
+              userId:         senderUserId,
+              type:           WalletLedgerType.DEBIT,
+              source:         WalletLedgerSource.TRANSFER,
+              amount,
+              openingBalance: senderOpening,
+              closingBalance: senderClosing,
+              updateBalance:  true,
+            },
+          }),
+          tx.walletLedger.create({
+            data: {
+              walletId:       recipientWallet.id,
+              userId:         recipient.id,
+              type:           WalletLedgerType.CREDIT,
+              source:         WalletLedgerSource.TRANSFER,
+              amount,
+              openingBalance: recipientOpening,
+              closingBalance: recipientClosing,
+              updateBalance:  true,
+            },
+          }),
+        ]);
+
+        return { newBalance: senderClosing };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );

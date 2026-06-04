@@ -97,6 +97,52 @@ router.get('/history', authenticate, WalletController.getHistory);
 
 /**
  * @swagger
+ * /wallet/send:
+ *   post:
+ *     summary: Send money from the current user's wallet to a recipient by phone number
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - recipientPhone
+ *               - amount
+ *             properties:
+ *               recipientPhone:
+ *                 type: string
+ *                 description: Recipient's registered phone number
+ *               amount:
+ *                 type: number
+ *                 minimum: 0.01
+ *     responses:
+ *       200:
+ *         description: Money sent successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     newBalance:
+ *                       type: number
+ *       400:
+ *         description: Insufficient balance, invalid phone, or validation error
+ *       404:
+ *         description: Recipient not found
+ *       401:
+ *         description: Unauthorized
+ */
+router.post('/send', authenticate, WalletController.sendMoney);
+
+/**
+ * @swagger
  * /wallet/user/{userId}:
  *   get:
  *     summary: Get wallet for a specific user (Admin only)

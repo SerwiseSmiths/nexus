@@ -81,6 +81,7 @@ enum PaymentProvider {
 
 enum PaymentOrderStatus {
   PENDING
+  PROCESSING
   CAPTURED
   FAILED
 }
@@ -127,6 +128,7 @@ model User {
   lastName      String?
   role          Role           @default(CUSTOMER)
   avatar        String?
+  referralCode  String?        @unique
   isActive      Boolean        @default(true)
   isDeleted     Boolean        @default(false)
   refreshTokens RefreshToken[]
@@ -150,6 +152,7 @@ model User {
   updatedAt     DateTime       @updatedAt
 
   @@index([phoneNo])
+  @@index([referralCode])
 }
 
 model RefreshToken {

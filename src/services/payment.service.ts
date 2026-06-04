@@ -247,14 +247,23 @@ export class PaymentService {
 
       // ── Path A: order-based payment (API keys were used) ─────────────────────
       if (razorpayOrderId) {
-        const paymentOrder = await prisma.paymentOrder.findFirst({
+        // Atomically claim the order by transitioning PENDING→PROCESSING.
+        // If count===0, another webhook already claimed it — safe to ignore.
+        const claimed = await prisma.paymentOrder.updateMany({
           where: { razorpayOrderId, status: PaymentOrderStatus.PENDING, isDeleted: false },
+          data:  { status: PaymentOrderStatus.PROCESSING },
         });
 
-        if (!paymentOrder) {
-          logger.warn('[Webhook] No pending PaymentOrder for order', { razorpayOrderId });
+        if (claimed.count === 0) {
+          logger.info('[Webhook] PaymentOrder already claimed or not found, skipping', { razorpayOrderId });
           return;
         }
+
+        const paymentOrder = await prisma.paymentOrder.findFirst({
+          where: { razorpayOrderId, isDeleted: false },
+        });
+
+        if (!paymentOrder) return; // should never happen after successful updateMany
 
         try {
           if (paymentOrder.purpose === 'subscription') {

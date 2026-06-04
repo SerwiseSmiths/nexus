@@ -5,6 +5,7 @@ import prisma from "./prisma.service";
 import { sendWhatsAppText } from "./msg91.service";
 import { Role } from "@prisma/client";
 import { ApiError } from "../utils/apiResponse";
+import { generateUniqueReferralCode } from "../utils/referralCode";
 
 const OTP_TTL_MINUTES = 10;
 const OTP_MAX_ATTEMPTS = 5;
@@ -86,9 +87,14 @@ export class AuthService {
     const isNewUser = !user;
 
     if (!user) {
+      const referralCode = await generateUniqueReferralCode();
       user = await prisma.user.create({
-        data: { phoneNo, role },
+        data: { phoneNo, role, referralCode },
       });
+    } else if (!user.referralCode) {
+      const referralCode = await generateUniqueReferralCode();
+      await prisma.user.update({ where: { id: user.id }, data: { referralCode } });
+      user = { ...user, referralCode };
     }
 
     // Generate tokens
