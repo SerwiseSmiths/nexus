@@ -88,8 +88,12 @@ export class AuthService {
 
     if (!user) {
       const referralCode = await generateUniqueReferralCode();
-      user = await prisma.user.create({
-        data: { phoneNo, role, referralCode },
+      user = await prisma.$transaction(async (tx) => {
+        const created = await tx.user.create({
+          data: { phoneNo, role, referralCode },
+        });
+        await tx.wallet.create({ data: { userId: created.id } });
+        return created;
       });
     } else if (!user.referralCode) {
       const referralCode = await generateUniqueReferralCode();
