@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { UserController } from '@/controllers/user.controller';
 import { AddressController } from '@/controllers/address.controller';
 import { SubscriptionController } from '@/controllers/subscription.controller';
+import { WalletController } from '@/controllers/wallet.controller';
 import { auth } from '@/middlewares/auth.middleware';
 
 const router = Router();
@@ -155,5 +156,42 @@ router.post('/addresses', auth, AddressController.create);
 router.get('/addresses/:id', auth, AddressController.getOne);
 router.put('/addresses/:id', auth, AddressController.update);
 router.delete('/addresses/:id', auth, AddressController.remove);
+
+// ─── Wallet ───────────────────────────────────────────────────────────────────
+
+/**
+ * @swagger
+ * /me/wallet:
+ *   get:
+ *     summary: Get the current user's wallet
+ *     tags: [Me]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Wallet fetched successfully
+ */
+router.get('/wallet', auth, WalletController.getMyWallet);
+
+/**
+ * @swagger
+ * /me/wallet/transactions:
+ *   get:
+ *     summary: Get paginated wallet transaction history for the current user
+ *     tags: [Me]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 10 }
+ *     responses:
+ *       200:
+ *         description: Wallet transactions fetched successfully
+ */
+router.get('/wallet/transactions', auth, WalletController.getHistory);
 
 export default router;
