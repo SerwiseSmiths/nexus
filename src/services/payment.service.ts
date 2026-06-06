@@ -8,6 +8,7 @@ import prisma from '@/services/prisma.service';
 import { SubscriptionService } from '@/services/subscription.service';
 import { WalletService } from '@/services/wallet.service';
 import { RealtimeService } from '@/services/realtime.service';
+import { ComplaintService } from '@/services/complaint.service';
 import type {
   CreateRazorpayOrderInput,
   CreatePaymentLinkInput,
@@ -413,31 +414,56 @@ export class PaymentService {
   }
 
   // ─── Fulfil a one-off complaint/service payment ────────────────────────────
-  // Complaint was already created by the client; we just record the ledger entry.
+  // Creates the complaint from the meta stored on the payment order, then records
+  // the audit ledger entry. Complaint creation lives here (not client-side) so
+  // that UPI payments which interrupt the app still result in a complaint.
 
   private static async fulfillComplaintPayment(
     paymentOrder: { id: string; userId: string; amount: number; meta: unknown },
     razorpayPaymentId: string,
   ): Promise<void> {
-    const meta = paymentOrder.meta as { complaintId?: string };
+    const meta = paymentOrder.meta as {
+      serviceType?: string;
+      deviceLines?: string;
+      addressId?:   string;
+      deviceKey?:   string;
+      tags?:        string[];
+      notes?:       string;
+    };
+
+    const title = [meta.serviceType, meta.deviceLines].filter(Boolean).join(': ') || 'Service Visit';
+
+    const notesParts: string[] = [];
+    if (meta.tags?.length) notesParts.push(`Issues: ${meta.tags.join(', ')}`);
+    if (meta.notes)        notesParts.push(meta.notes);
+    notesParts.push(`Payment: UPI (₹${paymentOrder.amount / 100})`);
+    notesParts.push(`Razorpay ID: ${razorpayPaymentId}`);
+
+    const complaint = await ComplaintService.createComplaint({
+      userId:    paymentOrder.userId,
+      title,
+      notes:     notesParts.join('\n'),
+      addressId: meta.addressId ?? '',
+      deviceKey: meta.deviceKey,
+    });
 
     // Audit-only debit entry — tracks the service fee without touching wallet balance
     const { ledger } = await WalletService.debitWallet({
       userId:          paymentOrder.userId,
       amount:          paymentOrder.amount / 100,
       source:          WalletLedgerSource.ORDER_PAYMENT,
-      refId:           meta.complaintId,
+      refId:           complaint.id,
       paymentProvider: PaymentProvider.RAZORPAY,
       updateBalance:   false,
-      meta:            { razorpayPaymentId, complaintId: meta.complaintId },
+      meta:            { razorpayPaymentId, complaintId: complaint.id },
     });
 
-    logger.info('[Payment] Complaint payment ledger recorded', {
-      userId: paymentOrder.userId, ledgerId: ledger.id, complaintId: meta.complaintId,
+    logger.info('[Payment] Complaint payment fulfilled', {
+      userId: paymentOrder.userId, ledgerId: ledger.id, complaintId: complaint.id,
     });
 
     await RealtimeService.emitPaymentVerified(paymentOrder.userId, {
-      complaintId: meta.complaintId,
+      complaintId: complaint.id,
       ledgerId:    ledger.id,
       amount:      paymentOrder.amount / 100,
     });
