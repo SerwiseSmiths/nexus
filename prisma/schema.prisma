@@ -92,6 +92,8 @@ enum NotificationType {
   SERVICE
   COMPLAINT
   GENERAL
+  PAYMENT
+  SECURITY
 }
 
 // ─── Subscription Enums ───────────────────────────────────────────────────────

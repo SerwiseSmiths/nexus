@@ -3,7 +3,8 @@ import bcrypt from "bcryptjs";
 import { config } from "../configs";
 import prisma from "./prisma.service";
 import { sendWhatsAppText } from "./msg91.service";
-import { Role } from "@prisma/client";
+import { Role, NotificationType } from "@prisma/client";
+import { NotificationService } from '@/services/notification.service';
 import { ApiError } from "../utils/apiResponse";
 import { generateUniqueReferralCode } from "../utils/referralCode";
 
@@ -104,6 +105,16 @@ export class AuthService {
     // Generate tokens
     const tokens = await this.generateAuthTokens(user.id, user.phoneNo, user.role);
 
+    // Notify other devices of a new sign-in (skip for brand-new accounts — no devices registered yet)
+    if (!isNewUser) {
+      NotificationService.sendToUser({
+        userId: user.id,
+        title:  'New Sign-In Detected',
+        body:   'Your Serwise account was just signed in. If this wasn\'t you, contact support.',
+        type:   NotificationType.SECURITY,
+      }).catch(() => {});
+    }
+
     return {
       user,
       tokens,
@@ -165,7 +176,21 @@ export class AuthService {
   }
 
   static async logout(refreshToken: string) {
+    const record = await prisma.refreshToken.findUnique({
+      where:  { token: refreshToken },
+      select: { userId: true },
+    });
+
     await prisma.refreshToken.deleteMany({ where: { token: refreshToken } });
+
+    if (record?.userId) {
+      NotificationService.sendToUser({
+        userId: record.userId,
+        title:  'Signed Out',
+        body:   'Your Serwise account has been signed out.',
+        type:   NotificationType.SECURITY,
+      }).catch(() => {});
+    }
   }
 
   // ── Provider (Radix) auth ─────────────────────────────────────────────────

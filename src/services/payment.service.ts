@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import axios from 'axios';
-import { PaymentOrderStatus, PaymentSessionStatus, WalletLedgerSource, PaymentProvider } from '@prisma/client';
+import { PaymentOrderStatus, PaymentSessionStatus, WalletLedgerSource, PaymentProvider, NotificationType } from '@prisma/client';
 import { config } from '@/configs';
 import { ApiError } from '@/utils/apiResponse';
 import { logger } from '@/utils/logger';
@@ -9,6 +9,7 @@ import { SubscriptionService } from '@/services/subscription.service';
 import { WalletService } from '@/services/wallet.service';
 import { RealtimeService } from '@/services/realtime.service';
 import { ComplaintService } from '@/services/complaint.service';
+import { NotificationService } from '@/services/notification.service';
 import type {
   CreateRazorpayOrderInput,
   CreatePaymentLinkInput,
@@ -378,11 +379,20 @@ export class PaymentService {
       subscriptionId: subscription.id, ledgerId: ledger.id, userId: paymentOrder.userId,
     });
 
-    await RealtimeService.emitPaymentVerified(paymentOrder.userId, {
-      subscriptionId: subscription.id,
-      ledgerId:       ledger.id,
-      amount:         paymentOrder.amount / 100,
-    });
+    await Promise.allSettled([
+      RealtimeService.emitPaymentVerified(paymentOrder.userId, {
+        subscriptionId: subscription.id,
+        ledgerId:       ledger.id,
+        amount:         paymentOrder.amount / 100,
+      }),
+      NotificationService.sendToUser({
+        userId:   paymentOrder.userId,
+        title:    'Plan Activated',
+        body:     'Your service plan is now active.',
+        type:     NotificationType.PAYMENT,
+        metadata: { navigate: 'wallet' },
+      }),
+    ]);
   }
 
   // ─── Fulfil a wallet recharge after payment ────────────────────────────────
@@ -406,11 +416,20 @@ export class PaymentService {
       newBalance: wallet.balance, ledgerId: ledger.id,
     });
 
-    await RealtimeService.emitPaymentVerified(paymentOrder.userId, {
-      walletBalance: wallet.balance,
-      ledgerId:      ledger.id,
-      amount:        paymentOrder.amount / 100,
-    });
+    await Promise.allSettled([
+      RealtimeService.emitPaymentVerified(paymentOrder.userId, {
+        walletBalance: wallet.balance,
+        ledgerId:      ledger.id,
+        amount:        paymentOrder.amount / 100,
+      }),
+      NotificationService.sendToUser({
+        userId:   paymentOrder.userId,
+        title:    'Payment Received',
+        body:     `₹${paymentOrder.amount / 100} has been added to your wallet.`,
+        type:     NotificationType.PAYMENT,
+        metadata: { navigate: 'wallet' },
+      }),
+    ]);
   }
 
   // ─── Fulfil a one-off complaint/service payment ────────────────────────────
@@ -462,10 +481,20 @@ export class PaymentService {
       userId: paymentOrder.userId, ledgerId: ledger.id, complaintId: complaint.id,
     });
 
-    await RealtimeService.emitPaymentVerified(paymentOrder.userId, {
-      complaintId: complaint.id,
-      ledgerId:    ledger.id,
-      amount:      paymentOrder.amount / 100,
-    });
+    await Promise.allSettled([
+      RealtimeService.emitPaymentVerified(paymentOrder.userId, {
+        complaintId: complaint.id,
+        ledgerId:    ledger.id,
+        amount:      paymentOrder.amount / 100,
+      }),
+      NotificationService.sendToUser({
+        userId:      paymentOrder.userId,
+        title:       'Booking Confirmed',
+        body:        'Your service visit has been scheduled.',
+        type:        NotificationType.PAYMENT,
+        complaintId: complaint.id,
+        metadata:    { navigate: 'wallet' },
+      }),
+    ]);
   }
 }
