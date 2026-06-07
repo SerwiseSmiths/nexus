@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import app from './app';
-import { config, initializeConfig } from '@/configs';
+import { config, initializeConfig, startConfigPolling } from '@/configs';
 import { initializeCloudinary } from '@/configs/cloudinary.config';
 import { logger } from '@/utils/logger';
 import { StrapiService } from '@/services/strapi.service';
@@ -8,6 +8,7 @@ import { StrapiService } from '@/services/strapi.service';
 const startServer = async () => {
   try {
     await initializeConfig();
+    startConfigPolling();
     initializeCloudinary();
 
     const server = app.listen(config.port, () => {

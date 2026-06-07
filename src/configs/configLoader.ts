@@ -91,6 +91,11 @@ export class ConfigLoader {
     return this.rawPool[prefixedKey] || this.rawPool[key];
   }
 
+  static async refresh(): Promise<void> {
+    if (this.activeEnv === 'local') return;
+    await this.fetchRemoteConfig();
+  }
+
   static getEnv(): ConfigSource {
     return this.activeEnv;
   }
