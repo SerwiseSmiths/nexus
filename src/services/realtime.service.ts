@@ -184,7 +184,7 @@ export class RealtimeService {
     // Wait 10 s before broadcasting — gives the client time to navigate to
     // PaymentVerificationScreen and join the Supabase channel.
     logger.info(`[Realtime] payment:verified queued — userId=${userId}`);
-    await sleep(10_000);
+    await sleep(7_000);
 
     logger.info(`[Realtime] broadcasting payment:verified — channel=user:${userId}`, { payload });
     try {
