@@ -56,11 +56,9 @@ export class RealtimeService {
   ): Promise<void> {
     try {
       await this.broadcast(`user:${userId}`, event, payload);
-      logger.info(`[Realtime] ✓ sent to user`, { userId, event });
+      logger.info(`[Realtime] ✓ ${event} delivered — userId=${userId}`);
     } catch (err: any) {
-      logger.error(`[Realtime] ✗ failed for user`, {
-        userId,
-        event,
+      logger.error(`[Realtime] ✗ ${event} FAILED — userId=${userId}`, {
         status:  err?.response?.status,
         data:    err?.response?.data ?? err?.responseData,
         message: err?.message,
@@ -162,16 +160,15 @@ export class RealtimeService {
   ): Promise<void> {
     // Wait 10 s before broadcasting — gives the client time to navigate to
     // PaymentVerificationScreen and join the Supabase channel.
-    logger.info('[Realtime] payment:verified queued (10s delay)', { userId });
+    logger.info(`[Realtime] payment:verified queued — userId=${userId}`);
     await sleep(10_000);
 
-    logger.info('[Realtime] broadcasting payment:verified', { userId, payload });
+    logger.info(`[Realtime] broadcasting payment:verified — channel=user:${userId}`, { payload });
     try {
       await this.broadcast(`user:${userId}`, 'payment:verified', payload);
-      logger.info('[Realtime] ✓ payment:verified delivered to user', { userId });
+      logger.info(`[Realtime] ✓ payment:verified delivered — userId=${userId}`);
     } catch (err: any) {
-      logger.error('[Realtime] ✗ payment:verified FAILED for user', {
-        userId,
+      logger.error(`[Realtime] ✗ payment:verified FAILED — userId=${userId}`, {
         status:  err?.response?.status,
         data:    err?.response?.data ?? err?.responseData,
         message: err?.message,
