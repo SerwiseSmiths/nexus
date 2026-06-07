@@ -1,4 +1,4 @@
-import axios from 'axios';
+import { createClient } from '@supabase/supabase-js';
 import { getSupabaseConfig } from '@/configs/supabase.config';
 import { logger } from '@/utils/logger';
 import { sleep } from '@/utils/sleep';
@@ -6,10 +6,11 @@ import { sleep } from '@/utils/sleep';
 // ---------------------------------------------------------------------------
 // RealtimeService
 //
-// Broadcasts events to Supabase Realtime channels via the REST broadcast API.
-// This is stateless and Vercel-serverless-safe — no persistent WebSocket is kept.
+// Broadcasts events to Supabase Realtime channels via the Supabase JS client
+// (WebSocket channel.send), matching the exact pattern apps use to receive:
+//   .on('broadcast', { event: 'payment:verified' }, handler)
 //
-// Client apps should subscribe to:
+// Client apps subscribe to:
 //   - channel "user:{userId}"     → customer events
 //   - channel "provider:{userId}" → provider events
 // ---------------------------------------------------------------------------
@@ -20,31 +21,53 @@ interface BroadcastPayload {
 
 export class RealtimeService {
   private static async broadcast(
-    channel: string,
+    channelName: string,
     event: string,
     payload: BroadcastPayload,
   ): Promise<void> {
     const { url, serviceRoleKey } = getSupabaseConfig();
-    const broadcastUrl = `${url}/realtime/v1/api/broadcast`;
 
-    const res = await axios.post(
-      broadcastUrl,
-      {
-        messages: [{ topic: `realtime:${channel}`, event, payload }],
-      },
-      {
-        headers: {
-          'Content-Type':  'application/json',
-          Authorization:   `Bearer ${serviceRoleKey}`,
-          apikey:          serviceRoleKey,
-        },
-        timeout: 5000,
-      },
-    );
+    logger.info(`[Realtime] connecting to broadcast on channel=${channelName} event=${event}`, { supabaseUrl: url });
 
-    if (res.status < 200 || res.status >= 300) {
-      throw Object.assign(new Error(`Supabase returned ${res.status}`), { responseData: res.data });
-    }
+    const supabase = createClient(url, serviceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+
+    const channel = supabase.channel(channelName);
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        supabase.removeChannel(channel);
+        reject(new Error(`[Realtime] broadcast timed out — channel=${channelName}`));
+      }, 10_000);
+
+      channel.subscribe((status: string, err?: Error) => {
+        logger.info(`[Realtime] channel status`, { channel: channelName, status });
+
+        if (err) {
+          clearTimeout(timeout);
+          supabase.removeChannel(channel);
+          reject(err);
+          return;
+        }
+
+        if (status === 'SUBSCRIBED') {
+          channel
+            .send({ type: 'broadcast', event, payload })
+            .then((sendStatus) => {
+              clearTimeout(timeout);
+              logger.info(`[Realtime] broadcast send status`, { channel: channelName, event, sendStatus });
+              supabase.removeChannel(channel);
+              resolve();
+            })
+            .catch((sendErr: unknown) => {
+              clearTimeout(timeout);
+              supabase.removeChannel(channel);
+              reject(sendErr);
+            });
+        }
+      });
+    });
   }
 
   // ─── Per-user / per-provider emit ─────────────────────────────────────────
