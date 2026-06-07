@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { getSupabaseConfig } from '@/configs/supabase.config';
 import { logger } from '@/utils/logger';
+import { sleep } from '@/utils/sleep';
 
 // ---------------------------------------------------------------------------
 // RealtimeService
@@ -147,6 +148,10 @@ export class RealtimeService {
     userId: string,
     payload: BroadcastPayload,
   ): Promise<void> {
+    // Wait 5 s before broadcasting — Razorpay's SDK holds the success callback
+    // for ~3 s, so the client app needs a moment to navigate to the verification
+    // screen and join the Supabase channel before the event arrives.
+    await sleep(5_000);
     await this.emitToUser(userId, 'payment:verified', payload);
   }
 }
