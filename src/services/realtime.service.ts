@@ -151,7 +151,7 @@ export class RealtimeService {
     // Wait 5 s before broadcasting — Razorpay's SDK holds the success callback
     // for ~3 s, so the client app needs a moment to navigate to the verification
     // screen and join the Supabase channel before the event arrives.
-    await sleep(5_000);
+    await sleep(10_000);
     await this.emitToUser(userId, 'payment:verified', payload);
   }
 }
