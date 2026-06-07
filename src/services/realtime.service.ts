@@ -25,24 +25,25 @@ export class RealtimeService {
     payload: BroadcastPayload,
   ): Promise<void> {
     const { url, serviceRoleKey } = getSupabaseConfig();
-    try {
-      await axios.post(
-        `${url}/realtime/v1/api/broadcast`,
-        {
-          messages: [{ topic: `realtime:${channel}`, event, payload }],
+    const broadcastUrl = `${url}/realtime/v1/api/broadcast`;
+
+    const res = await axios.post(
+      broadcastUrl,
+      {
+        messages: [{ topic: `realtime:${channel}`, event, payload }],
+      },
+      {
+        headers: {
+          'Content-Type':  'application/json',
+          Authorization:   `Bearer ${serviceRoleKey}`,
+          apikey:          serviceRoleKey,
         },
-        {
-          headers: {
-            'Content-Type':  'application/json',
-            Authorization:   `Bearer ${serviceRoleKey}`,
-            apikey:          serviceRoleKey,
-          },
-          timeout: 3000, // non-blocking — FCM is the offline fallback
-        },
-      );
-    } catch {
-      // Non-fatal — FCM handles offline delivery
-      logger.warn(`[Realtime] broadcast failed [channel=${channel}, event=${event}]`);
+        timeout: 5000,
+      },
+    );
+
+    if (res.status < 200 || res.status >= 300) {
+      throw Object.assign(new Error(`Supabase returned ${res.status}`), { responseData: res.data });
     }
   }
 
@@ -53,7 +54,18 @@ export class RealtimeService {
     event: string,
     payload: BroadcastPayload,
   ): Promise<void> {
-    await this.broadcast(`user:${userId}`, event, payload);
+    try {
+      await this.broadcast(`user:${userId}`, event, payload);
+      logger.info(`[Realtime] ✓ sent to user`, { userId, event });
+    } catch (err: any) {
+      logger.error(`[Realtime] ✗ failed for user`, {
+        userId,
+        event,
+        status:  err?.response?.status,
+        data:    err?.response?.data ?? err?.responseData,
+        message: err?.message,
+      });
+    }
   }
 
   static async emitToProvider(
@@ -148,10 +160,22 @@ export class RealtimeService {
     userId: string,
     payload: BroadcastPayload,
   ): Promise<void> {
-    // Wait 5 s before broadcasting — Razorpay's SDK holds the success callback
-    // for ~3 s, so the client app needs a moment to navigate to the verification
-    // screen and join the Supabase channel before the event arrives.
+    // Wait 10 s before broadcasting — gives the client time to navigate to
+    // PaymentVerificationScreen and join the Supabase channel.
+    logger.info('[Realtime] payment:verified queued (10s delay)', { userId });
     await sleep(10_000);
-    await this.emitToUser(userId, 'payment:verified', payload);
+
+    logger.info('[Realtime] broadcasting payment:verified', { userId, payload });
+    try {
+      await this.broadcast(`user:${userId}`, 'payment:verified', payload);
+      logger.info('[Realtime] ✓ payment:verified delivered to user', { userId });
+    } catch (err: any) {
+      logger.error('[Realtime] ✗ payment:verified FAILED for user', {
+        userId,
+        status:  err?.response?.status,
+        data:    err?.response?.data ?? err?.responseData,
+        message: err?.message,
+      });
+    }
   }
 }
