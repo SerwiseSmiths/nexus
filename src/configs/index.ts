@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ConfigLoader } from './configLoader';
+import { logger } from '@/utils/logger';
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['local', 'development', 'production', 'test']).default('local'),
@@ -18,6 +19,15 @@ const envSchema = z.object({
   CLOUDINARY_CLOUD_NAME: z.string().min(1),
   CLOUDINARY_API_KEY: z.string().min(1),
   CLOUDINARY_API_SECRET: z.string().min(1),
+  OLA_MAPS_API_KEY: z.string().min(1),
+  SUPABASE_URL: z.string().url(),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
+  STRAPI_URL: z.string().url().default('http://localhost:1337'),
+  STRAPI_API_TOKEN: z.string().optional(),
+  RAZORPAY_KEY_ID: z.string().optional(),
+  RAZORPAY_KEY_SECRET: z.string().optional(),
+  RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
+  APP_URL: z.string().url().optional(),
 });
 
 export type Config = z.infer<typeof envSchema>;
@@ -76,9 +86,58 @@ export const initializeConfig = async () => {
       apiKey: parsed.CLOUDINARY_API_KEY,
       apiSecret: parsed.CLOUDINARY_API_SECRET,
     },
+    olaMapsApiKey: parsed.OLA_MAPS_API_KEY,
+    supabase: {
+      url: parsed.SUPABASE_URL,
+      serviceRoleKey: parsed.SUPABASE_SERVICE_ROLE_KEY,
+    },
+    strapiUrl: parsed.STRAPI_URL,
+    strapiApiToken: parsed.STRAPI_API_TOKEN,
+    razorpay: {
+      keyId:         parsed.RAZORPAY_KEY_ID,
+      keySecret:     parsed.RAZORPAY_KEY_SECRET,
+      webhookSecret: parsed.RAZORPAY_WEBHOOK_SECRET,
+    },
+    appUrl: parsed.APP_URL,
   });
 
   return config;
 };
 
 export { config };
+
+const POLL_INTERVAL_MS = 5 * 60 * 1_000;
+let _pollingId: ReturnType<typeof setInterval> | null = null;
+
+export const startConfigPolling = (): void => {
+  if (ConfigLoader.getEnv() === 'local' || _pollingId !== null) return;
+
+  _pollingId = setInterval(async () => {
+    try {
+      await ConfigLoader.refresh();
+
+      const schemaKeys = Object.keys(envSchema.shape) as string[];
+      const resolvedEnv: Record<string, string | undefined> = {};
+      for (const key of schemaKeys) {
+        resolvedEnv[key] = ConfigLoader.resolve(key);
+      }
+
+      const parsed = envSchema.parse(resolvedEnv);
+
+      Object.assign(config, {
+        supabase:    { url: parsed.SUPABASE_URL, serviceRoleKey: parsed.SUPABASE_SERVICE_ROLE_KEY },
+        cloudinary:  { cloudName: parsed.CLOUDINARY_CLOUD_NAME, apiKey: parsed.CLOUDINARY_API_KEY, apiSecret: parsed.CLOUDINARY_API_SECRET },
+        msg91:       { authKey: parsed.MSG91_AUTH_KEY, integratedNumber: parsed.MSG91_WHATSAPP_INTEGRATED_NUMBER, templateName: parsed.MSG91_TEMPLATE_NAME, templateNamespace: parsed.MSG91_TEMPLATE_NAMESPACE },
+        razorpay:    { keyId: parsed.RAZORPAY_KEY_ID, keySecret: parsed.RAZORPAY_KEY_SECRET, webhookSecret: parsed.RAZORPAY_WEBHOOK_SECRET },
+        olaMapsApiKey: parsed.OLA_MAPS_API_KEY,
+        strapiUrl:   parsed.STRAPI_URL,
+        strapiApiToken: parsed.STRAPI_API_TOKEN,
+        appUrl:      parsed.APP_URL,
+      });
+
+      logger.info('[Config] Background poll: config refreshed from Remote Config');
+    } catch (error) {
+      logger.warn('[Config] Background poll failed:', error);
+    }
+  }, POLL_INTERVAL_MS);
+};

@@ -7,12 +7,13 @@ export interface CreateAddressInput {
   addressLineOne?: string;
   addressLineTwo?: string;
   area?: string;
-  pinCode: string;
-  city: string;
+  pinCode?: string;
+  city?: string;
   state?: string;
   country?: string;
   latitude?: string;
   longitude?: string;
+  directionNote?: string;
 }
 
 export interface UpdateAddressInput extends Partial<CreateAddressInput> {}

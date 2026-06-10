@@ -1,0 +1,139 @@
+import { Router } from 'express';
+import { PaymentController } from '@/controllers/payment.controller';
+import { auth as authenticate } from '@/middlewares/auth.middleware';
+
+const router = Router();
+
+/**
+ * @swagger
+ * tags:
+ *   name: Payment
+ *   description: Payment gateway integration
+ */
+
+/**
+ * @swagger
+ * /payments/razorpay/order:
+ *   post:
+ *     summary: Create a Razorpay order and persist a pending PaymentOrder
+ *     tags: [Payment]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - amount
+ *             properties:
+ *               amount:
+ *                 type: integer
+ *                 description: Amount in paise (e.g. 18500 for ₹185)
+ *                 example: 18500
+ *               purpose:
+ *                 type: string
+ *                 description: Intent for this payment (e.g. "subscription")
+ *                 example: subscription
+ *               meta:
+ *                 type: object
+ *                 description: Payload to store with the order for webhook fulfilment
+ *     responses:
+ *       201:
+ *         description: Order created successfully
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized
+ *       502:
+ *         description: Razorpay API error
+ *       503:
+ *         description: Razorpay not configured
+ */
+router.post('/razorpay/order', authenticate, PaymentController.createRazorpayOrder);
+
+/**
+ * @swagger
+ * /payments/razorpay/session:
+ *   post:
+ *     summary: Create a payment session before opening the Razorpay WebView
+ *     tags: [Payment]
+ *     security:
+ *       - bearerAuth: []
+ *     description: >
+ *       No API keys required. Stores user intent (purpose + amount + meta) so the
+ *       webhook handler can match the incoming payment to the right user by phone number.
+ */
+router.post('/razorpay/session', authenticate, PaymentController.createPaymentSession);
+
+/**
+ * @swagger
+ * /payments/razorpay/webview-complete:
+ *   post:
+ *     summary: Complete a payment made via Razorpay payment link WebView
+ *     tags: [Payment]
+ *     security:
+ *       - bearerAuth: []
+ *     description: >
+ *       Used when API keys are not yet available (pre-approval).
+ *       Client submits the razorpay_payment_id extracted from the WebView success URL.
+ *       Backend fulfils the purchase (subscription / recharge / complaint) and records the ledger entry.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [paymentId, purpose, amountRupees]
+ *             properties:
+ *               paymentId:    { type: string }
+ *               purpose:      { type: string, example: subscription }
+ *               amountRupees: { type: number, example: 399 }
+ *               meta:         { type: object }
+ *     responses:
+ *       200:
+ *         description: Payment processed
+ *       409:
+ *         description: Payment already processed (idempotency)
+ */
+router.post('/razorpay/webview-complete', authenticate, PaymentController.handleWebviewComplete);
+
+/**
+ * @swagger
+ * /payments/razorpay/link:
+ *   post:
+ *     summary: Create a Razorpay Payment Link (WebView — real Razorpay URL, amount set server-side)
+ *     tags: [Payment]
+ *     security:
+ *       - bearerAuth: []
+ */
+router.post('/razorpay/link', authenticate, PaymentController.createPaymentLink);
+
+/**
+ * @swagger
+ * /payments/razorpay/link-callback:
+ *   get:
+ *     summary: Razorpay payment link callback — WebView detects this URL for success/failure
+ *     tags: [Payment]
+ */
+router.get('/razorpay/link-callback', PaymentController.handleLinkCallback);
+
+/**
+ * @swagger
+ * /payments/razorpay/webhook:
+ *   post:
+ *     summary: Razorpay webhook — verifies signature and fulfils pending payments
+ *     tags: [Payment]
+ *     description: >
+ *       Registered in the Razorpay dashboard. Handles payment.captured and
+ *       payment.authorized events. Signature verified via RAZORPAY_WEBHOOK_SECRET.
+ *     responses:
+ *       200:
+ *         description: Event received
+ *       400:
+ *         description: Invalid signature or missing body
+ */
+router.post('/razorpay/webhook', PaymentController.handleWebhook);
+
+export default router;

@@ -9,14 +9,20 @@
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "jest",
-    "migrate:deploy:all": "ts-node -r tsconfig-paths/register src/scripts/runMigrations.ts",
-    "seed:admin:all": "ts-node -r tsconfig-paths/register src/scripts/seedAdmin.ts"
+    "migrate:generate": "ts-node -r tsconfig-paths/register src/scripts/generateMigration.ts",
+    "migrate:deploy:local": "ts-node -r tsconfig-paths/register src/scripts/runMigrations.ts local",
+    "migrate:deploy:dev": "ts-node -r tsconfig-paths/register src/scripts/runMigrations.ts development",
+    "migrate:deploy:prod": "ts-node -r tsconfig-paths/register src/scripts/runMigrations.ts production",
+    "migrate:deploy:all": "ts-node -r tsconfig-paths/register src/scripts/runMigrations.ts all",
+    "seed:admin:all": "ts-node -r tsconfig-paths/register src/scripts/seedAdmin.ts",
+    "backfill:wallets": "ts-node -r tsconfig-paths/register src/scripts/backfillWallets.ts"
   },
   "_moduleAliases": {
     "@": "dist"
   },
   "dependencies": {
     "@prisma/client": "^6.18.0",
+    "@supabase/supabase-js": "^2.105.4",
     "axios": "^1.15.0",
     "bcryptjs": "^3.0.3",
     "cloudinary": "^2.10.0",
@@ -60,6 +66,7 @@
     "prettier": "^3.8.2",
     "prisma": "^6.18.0",
     "ts-jest": "^29.4.9",
+    "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
     "typescript": "^6.0.2"
   }

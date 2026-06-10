@@ -1,16 +1,19 @@
 import 'dotenv/config';
 import app from './app';
-import { config, initializeConfig } from '@/configs';
+import { config, initializeConfig, startConfigPolling } from '@/configs';
 import { initializeCloudinary } from '@/configs/cloudinary.config';
 import { logger } from '@/utils/logger';
+import { StrapiService } from '@/services/strapi.service';
 
 const startServer = async () => {
   try {
     await initializeConfig();
+    startConfigPolling();
     initializeCloudinary();
 
     const server = app.listen(config.port, () => {
       logger.info(`Nexus Backend started in ${config.env} mode on port ${config.port}`);
+      StrapiService.ping();
     });
 
     process.on('SIGTERM', () => {

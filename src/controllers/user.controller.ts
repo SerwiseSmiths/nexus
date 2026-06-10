@@ -61,4 +61,16 @@ export class UserController {
       next(error);
     }
   }
+
+  static async getSelf(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const flags = {
+        address: req.query.address === 'true',
+      };
+      const user = await UserService.getSelf(req.user!.id, flags);
+      return ApiResponse.success(res, 200, 'User fetched successfully', { user });
+    } catch (error) {
+      next(error);
+    }
+  }
 }

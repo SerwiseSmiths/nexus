@@ -38,11 +38,24 @@ export class ConfigLoader {
 
   private static async fetchRemoteConfig() {
     const admin = initializeFirebase();
-    if (!admin) return;
+    if (!admin) {
+      if (this.activeEnv === 'production') {
+        throw new Error(
+          'Firebase Admin failed to initialize. Ensure FIREBASE_SERVICE_ACCOUNT is set in production environment variables.'
+        );
+      }
+      return;
+    }
 
     try {
       logger.info('Fetching Firebase Remote Config...');
-      const template = await admin.remoteConfig().getTemplate();
+      const fetchWithTimeout = Promise.race([
+        admin.remoteConfig().getTemplate(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Firebase Remote Config fetch timed out after 10s')), 10_000)
+        ),
+      ]);
+      const template = await fetchWithTimeout;
       const parameters = template.parameters;
 
       for (const [key, param] of Object.entries(parameters)) {
@@ -51,10 +64,12 @@ export class ConfigLoader {
         }
       }
       logger.info(`Fetched ${Object.keys(parameters).length} parameters from Remote Config.`);
+      logger.info(`Remote Config keys: [${Object.keys(parameters).join(', ')}]`);
+      logger.info(`DATABASE_URL resolved: ${this.rawPool['DEV_DATABASE_URL'] ? 'DEV_DATABASE_URL ✓' : this.rawPool['DATABASE_URL'] ? 'DATABASE_URL ✓' : 'NOT FOUND ✗'}`);
     } catch (error) {
       logger.error('Failed to fetch Remote Config:', error);
-      if (this.activeEnv === 'production') {
-        throw new Error('Production config fetch failed. Aborting startup.');
+      if (this.activeEnv !== 'local') {
+        throw new Error(`Config fetch failed in ${this.activeEnv}: ${(error as Error).message}`);
       }
     }
   }
@@ -74,6 +89,11 @@ export class ConfigLoader {
 
     const prefixedKey = `${prefix}${key}`;
     return this.rawPool[prefixedKey] || this.rawPool[key];
+  }
+
+  static async refresh(): Promise<void> {
+    if (this.activeEnv === 'local') return;
+    await this.fetchRemoteConfig();
   }
 
   static getEnv(): ConfigSource {

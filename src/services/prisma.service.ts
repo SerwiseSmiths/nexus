@@ -1,5 +1,18 @@
 import { PrismaClient } from "@prisma/client";
 
-const prisma = new PrismaClient();
+let _client: PrismaClient | null = null;
 
-export default prisma;
+function getClient(): PrismaClient {
+  if (!_client) {
+    _client = new PrismaClient();
+  }
+  return _client;
+}
+
+// Defer instantiation until first use so process.env.DATABASE_URL is set by
+// initializeConfig() before Prisma reads it.
+export default new Proxy({} as PrismaClient, {
+  get(_target, prop, receiver) {
+    return Reflect.get(getClient(), prop, receiver);
+  },
+});

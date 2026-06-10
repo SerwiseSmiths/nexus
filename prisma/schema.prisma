@@ -8,28 +8,153 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+// ─── Existing Enums ───────────────────────────────────────────────────────────
+
 enum Role {
   PROVIDER
   CUSTOMER
   ADMIN
 }
 
+enum DeviceType {
+  MASTER_PURIFIER
+  AIR_CONDITIONER
+  FRIDGE
+  WASHING_MACHINE
+  GEYSER
+}
+
+enum WorkHistoryEvent {
+  PURCHASED
+  INSTALLED
+  REPAIR
+  INSPECTION
+  UNINSTALLED
+}
+
+// ─── Complaint Enums ──────────────────────────────────────────────────────────
+
+enum ComplaintStage {
+  ENTRANCE
+  QR_VALIDATED
+  ESTIMATION
+  APPROVAL
+  PAYMENT
+  COMPLETED
+  REJECTED
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+}
+
+enum QuoteStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ─── Wallet Enums ─────────────────────────────────────────────────────────────
+
+enum WalletLedgerType {
+  CREDIT
+  DEBIT
+}
+
+enum WalletLedgerSource {
+  RECHARGE
+  ORDER_PAYMENT
+  REFUND
+  ADMIN_ADJUSTMENT
+  CASHBACK
+  TRANSFER
+}
+
+enum PaymentProvider {
+  RAZORPAY
+  ADMIN
+  CASH
+}
+
+// ─── Payment Enums ────────────────────────────────────────────────────────────
+
+enum PaymentOrderStatus {
+  PENDING
+  PROCESSING
+  CAPTURED
+  FAILED
+}
+
+// ─── Notification Enums ───────────────────────────────────────────────────────
+
+enum NotificationType {
+  SERVICE
+  COMPLAINT
+  GENERAL
+  PAYMENT
+  SECURITY
+}
+
+// ─── Subscription Enums ───────────────────────────────────────────────────────
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum BillingCycle {
+  ANNUAL
+  MONTHLY
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum DevicePlatform {
+  ANDROID
+  IOS
+}
+
+// ─── Core Models ──────────────────────────────────────────────────────────────
+
 model User {
   id            String         @id @default(uuid())
   phoneNo       String         @unique
   email         String?        @unique
-  firstName     String   @default("")
-  lastName      String   @default("")
+  firstName     String?
+  lastName      String?
   role          Role           @default(CUSTOMER)
   avatar        String?
+  referralCode  String?        @unique
   isActive      Boolean        @default(true)
   isDeleted     Boolean        @default(false)
   refreshTokens RefreshToken[]
   addresses     Address[]
+  devices       Device[]
+  // Complaint relations
+  complaintsAsCustomer Complaint[]  @relation("CustomerComplaints")
+  complaintsAsProvider Complaint[]  @relation("ProviderComplaints")
+  // Notification relations
+  notifications  Notification[]
+  deviceTokens   DeviceToken[]
+  // Wallet relations
+  wallet         Wallet?
+  walletLedger   WalletLedger[]
+  // Payment relations
+  paymentOrders   PaymentOrder[]
+  paymentSessions PaymentSession[]
+  // Subscription relations
+  subscriptions  Subscription[]
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
   @@index([phoneNo])
+  @@index([referralCode])
 }
 
 model RefreshToken {
@@ -55,24 +180,331 @@ model Otp {
 }
 
 model Address {
-  id             String   @id @default(uuid())
+  id             String      @id @default(uuid())
   userId         String
-  user           User     @relation(fields: [userId], references: [id])
+  user           User        @relation(fields: [userId], references: [id])
   title          String?
   houseNo        String
   societyName    String
   addressLineOne String?
   addressLineTwo String?
   area           String?
-  pinCode        String
-  city           String
+  pinCode        String?
+  city           String?
   state          String?
-  country        String   @default("India")
+  country        String      @default("India")
   latitude       String?
   longitude      String?
-  isDeleted      Boolean  @default(false)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  directionNote  String?
+  complaints     Complaint[]
+  devices        Device[]
+  isDeleted      Boolean     @default(false)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
 
   @@index([userId, isDeleted])
+}
+
+model Device {
+  id          String              @id @default(uuid())
+  userId      String
+  user        User                @relation(fields: [userId], references: [id])
+  addressId   String?
+  address     Address?            @relation(fields: [addressId], references: [id])
+  // slug that maps to a Strapi content-type, e.g. "master_purifier"
+  deviceKey   String
+  type        DeviceType
+  imageUrl    String?
+  metadata    Json
+  workHistory   DeviceWorkHistory[]
+  complaints    Complaint[]
+  isDeleted     Boolean             @default(false)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([userId, isDeleted])
+  @@index([deviceKey])
+  @@index([addressId])
+}
+
+model DeviceWorkHistory {
+  id        String           @id @default(uuid())
+  deviceId  String
+  device    Device           @relation(fields: [deviceId], references: [id])
+  event     WorkHistoryEvent
+  eventDate DateTime
+  notes     String?
+  isDeleted Boolean          @default(false)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@index([deviceId, isDeleted])
+  @@index([deviceId, event])
+}
+
+// ─── Complaint Models ─────────────────────────────────────────────────────────
+
+model Complaint {
+  id                  String         @id @default(uuid())
+  userId              String
+  providerId          String?
+  addressId           String
+  deviceId            String?
+  // Strapi content-type slug for the linked device type
+  deviceKey           String?
+  title               String
+  notes               String?
+  stage               ComplaintStage @default(ENTRANCE)
+
+  // Provider assignment tracking
+  providerAccepted    Boolean        @default(false)
+  providerAcceptedAt  DateTime?
+  rejectedProviderIds String[]       @default([])
+
+  // Physical entry QR (10-min expiry, provider scans on-site)
+  entryQrToken        String?        @unique
+  entryQrExpiresAt    DateTime?
+
+  // Rejection metadata
+  rejectionReason     String?
+  rejectedAt          DateTime?
+  rejectedBy          String?
+
+  // Reopen chain — parentId links to the original closed complaint
+  parentId            String?
+
+  // Subscription — if this complaint is covered under a subscription visit
+  subscriptionId      String?
+
+  // Relations
+  user         User           @relation("CustomerComplaints", fields: [userId], references: [id])
+  provider     User?          @relation("ProviderComplaints", fields: [providerId], references: [id])
+  address      Address        @relation(fields: [addressId], references: [id])
+  device       Device?        @relation(fields: [deviceId], references: [id])
+  parent       Complaint?     @relation("ComplaintReopened", fields: [parentId], references: [id])
+  children     Complaint[]    @relation("ComplaintReopened")
+  subscription Subscription?  @relation(fields: [subscriptionId], references: [id])
+  media     ComplaintMedia[]
+  quote     Quote?
+  notifications Notification[]
+
+  isDeleted Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, isDeleted])
+  @@index([providerId, isDeleted])
+  @@index([stage])
+  @@index([parentId])
+  @@index([entryQrToken])
+  @@index([subscriptionId])
+}
+
+model ComplaintMedia {
+  id          String    @id @default(uuid())
+  complaintId String
+  complaint   Complaint @relation(fields: [complaintId], references: [id])
+  url         String
+  type        MediaType @default(IMAGE)
+  isDeleted   Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([complaintId])
+}
+
+model Quote {
+  id          String      @id @default(uuid())
+  complaintId String      @unique
+  complaint   Complaint   @relation(fields: [complaintId], references: [id])
+  items       Json        // [{ description: string, amount: number }]
+  totalAmount Float       @default(0)
+  notes       String?
+  status      QuoteStatus @default(PENDING)
+  isDeleted   Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([complaintId])
+}
+
+// ─── Notification Models ──────────────────────────────────────────────────────
+
+model Notification {
+  id          String             @id @default(uuid())
+  userId      String
+  user        User               @relation(fields: [userId], references: [id])
+  complaintId String?
+  complaint   Complaint?         @relation(fields: [complaintId], references: [id])
+  title       String
+  body        String
+  type        NotificationType   @default(SERVICE)
+  status      NotificationStatus @default(PENDING)
+  metadata    Json?
+  isRead      Boolean            @default(false)
+  isDeleted   Boolean            @default(false)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([userId, isDeleted])
+  @@index([complaintId])
+}
+
+// ─── Wallet Models ────────────────────────────────────────────────────────────
+
+model Wallet {
+  id        String         @id @default(uuid())
+  userId    String         @unique
+  user      User           @relation(fields: [userId], references: [id])
+  balance   Float          @default(0)
+  isActive  Boolean        @default(true)
+  isDeleted Boolean        @default(false)
+  ledger    WalletLedger[]
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@index([userId])
+}
+
+model WalletLedger {
+  id              String             @id @default(uuid())
+  walletId        String
+  wallet          Wallet             @relation(fields: [walletId], references: [id])
+  userId          String
+  user            User               @relation(fields: [userId], references: [id])
+  type            WalletLedgerType
+  source          WalletLedgerSource
+  amount          Float
+  openingBalance  Float
+  closingBalance  Float
+  refId           String?
+  meta            Json?
+  // payment_provider: tracks which payment channel originated this entry
+  paymentProvider PaymentProvider?
+  // updateBalance: false means the entry is audit-only — wallet.balance was NOT changed
+  updateBalance   Boolean            @default(true)
+  isDeleted       Boolean            @default(false)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@index([walletId, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+model DeviceToken {
+  id        String         @id @default(uuid())
+  userId    String
+  user      User           @relation(fields: [userId], references: [id])
+  token     String         @unique
+  platform  DevicePlatform
+  isActive  Boolean        @default(true)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@index([userId])
+  @@index([token])
+}
+
+// ─── Payment Order Model ──────────────────────────────────────────────────────
+
+model PaymentOrder {
+  id                String             @id @default(uuid())
+  userId            String
+  user              User               @relation(fields: [userId], references: [id])
+  razorpayOrderId   String             @unique
+  amount            Int                // in paise
+  status            PaymentOrderStatus @default(PENDING)
+  // purpose: "subscription" | "recharge" — drives fulfilment logic in webhook
+  purpose           String
+  // meta: snapshot of all data needed to fulfill the purpose after capture
+  meta              Json
+  razorpayPaymentId String?            // populated after successful capture
+  isDeleted         Boolean            @default(false)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@index([userId, isDeleted])
+  @@index([razorpayOrderId])
+  @@index([status])
+}
+
+// ─── Payment Session Model ────────────────────────────────────────────────────
+// Created before the WebView opens; webhook matches by phone + amount.
+
+enum PaymentSessionStatus {
+  PENDING
+  FULFILLED
+  EXPIRED
+}
+
+model PaymentSession {
+  id                  String               @id @default(uuid())
+  userId              String
+  user                User                 @relation(fields: [userId], references: [id])
+  phone               String               // user's phone, matched against webhook contact field
+  purpose             String               // subscription | recharge | complaint_payment
+  expectedAmountPaise Int                  // amount in paise, verified against webhook payload
+  meta                Json                 // subscription details, addon list, etc.
+  status              PaymentSessionStatus @default(PENDING)
+  expiresAt           DateTime             // 30-minute window
+  isDeleted           Boolean              @default(false)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  @@index([phone, status])
+  @@index([userId, status])
+  @@index([expiresAt])
+}
+
+// ─── Subscription Models ──────────────────────────────────────────────────────
+
+model Subscription {
+  id             String             @id @default(uuid())
+  userId         String
+  user           User               @relation(fields: [userId], references: [id])
+  // Subscription covers all devices of this type for the user (e.g. "master_purifier")
+  deviceTypeKey  String
+
+  // Plan snapshot captured at purchase time
+  planKey        String             // e.g. "LITE", "STANDARD", "COMPLETE"
+  planName       String
+  billingCycle   BillingCycle
+  planPrice      Float              // base plan price before addons
+  addons         Json               @default("[]") // [{ key, name, price }]
+  totalAmount    Float              // planPrice + sum(addon prices)
+
+  // Dual expiry: whichever fires first ends the subscription
+  maxServices    Int                // -1 = unlimited (time-only expiry)
+  servicesUsed   Int                @default(0)
+  startDate      DateTime
+  endDate        DateTime
+
+  status         SubscriptionStatus @default(ACTIVE)
+
+  services       SubscriptionService[]
+  complaints     Complaint[]
+
+  isDeleted      Boolean            @default(false)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  @@index([userId, isDeleted])
+  @@index([userId, deviceTypeKey, status])
+  @@index([status, endDate])
+}
+
+model SubscriptionService {
+  id             String       @id @default(uuid())
+  subscriptionId String
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id])
+  visitNumber    Int
+  scheduledDate  DateTime?    // informational estimated date for user
+  completedDate  DateTime?
+  complaintId    String?      // set when complaint is raised against this visit
+  serviceKeys    Json         @default("[]") // service-part keys included in this visit
+  isDeleted      Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([subscriptionId])
 }

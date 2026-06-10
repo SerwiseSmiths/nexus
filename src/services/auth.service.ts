@@ -3,7 +3,10 @@ import bcrypt from "bcryptjs";
 import { config } from "../configs";
 import prisma from "./prisma.service";
 import { sendWhatsAppText } from "./msg91.service";
-import { Role } from "@prisma/client";
+import { Role, NotificationType } from "@prisma/client";
+import { NotificationService } from '@/services/notification.service';
+import { ApiError } from "../utils/apiResponse";
+import { generateUniqueReferralCode } from "../utils/referralCode";
 
 const OTP_TTL_MINUTES = 10;
 const OTP_MAX_ATTEMPTS = 5;
@@ -85,13 +88,32 @@ export class AuthService {
     const isNewUser = !user;
 
     if (!user) {
-      user = await prisma.user.create({
-        data: { phoneNo, role },
+      const referralCode = await generateUniqueReferralCode();
+      user = await prisma.$transaction(async (tx) => {
+        const created = await tx.user.create({
+          data: { phoneNo, role, referralCode },
+        });
+        await tx.wallet.create({ data: { userId: created.id } });
+        return created;
       });
+    } else if (!user.referralCode) {
+      const referralCode = await generateUniqueReferralCode();
+      await prisma.user.update({ where: { id: user.id }, data: { referralCode } });
+      user = { ...user, referralCode };
     }
 
     // Generate tokens
     const tokens = await this.generateAuthTokens(user.id, user.phoneNo, user.role);
+
+    // Notify other devices of a new sign-in (skip for brand-new accounts — no devices registered yet)
+    if (!isNewUser) {
+      NotificationService.sendToUser({
+        userId: user.id,
+        title:  'New Sign-In Detected',
+        body:   'Your Serwise account was just signed in. If this wasn\'t you, contact support.',
+        type:   NotificationType.SECURITY,
+      }).catch(() => {});
+    }
 
     return {
       user,
@@ -154,6 +176,79 @@ export class AuthService {
   }
 
   static async logout(refreshToken: string) {
+    const record = await prisma.refreshToken.findUnique({
+      where:  { token: refreshToken },
+      select: { userId: true },
+    });
+
     await prisma.refreshToken.deleteMany({ where: { token: refreshToken } });
+
+    if (record?.userId) {
+      NotificationService.sendToUser({
+        userId: record.userId,
+        title:  'Signed Out',
+        body:   'Your Serwise account has been signed out.',
+        type:   NotificationType.SECURITY,
+      }).catch(() => {});
+    }
+  }
+
+  // ── Provider (Radix) auth ─────────────────────────────────────────────────
+  // Only allows existing PROVIDER accounts — never creates a user.
+
+  static async providerRequestOtp(phoneNo: string) {
+    const user = await prisma.user.findUnique({ where: { phoneNo } });
+
+    if (!user || user.isDeleted || !user.isActive) {
+      throw new ApiError(403, "This number is not registered as a professional");
+    }
+
+    if (user.role !== Role.PROVIDER) {
+      throw new ApiError(403, "This number is not registered as a professional");
+    }
+
+    return this.generateOtp(phoneNo);
+  }
+
+  static async providerVerifyOtp(phoneNo: string, otp: string) {
+    const record = await prisma.otp.findUnique({ where: { phoneNo } });
+
+    if (!record) {
+      throw new ApiError(400, "OTP not found or expired");
+    }
+
+    if (record.expiresAt < new Date()) {
+      await prisma.otp.delete({ where: { phoneNo } });
+      throw new ApiError(400, "OTP expired");
+    }
+
+    if (record.attempts >= OTP_MAX_ATTEMPTS) {
+      throw new ApiError(429, "Maximum OTP attempts exceeded");
+    }
+
+    const isMatch =
+      (phoneNo in TEST_PHONES && otp === TEST_PHONES[phoneNo]) ||
+      (await bcrypt.compare(otp, record.otp));
+
+    if (!isMatch) {
+      await prisma.otp.update({
+        where: { phoneNo },
+        data: { attempts: { increment: 1 } },
+      });
+      throw new ApiError(400, "Invalid OTP");
+    }
+
+    await prisma.otp.delete({ where: { phoneNo } });
+
+    // No user creation — provider must already exist
+    const user = await prisma.user.findUnique({ where: { phoneNo } });
+
+    if (!user || user.isDeleted || !user.isActive || user.role !== Role.PROVIDER) {
+      throw new ApiError(403, "Provider account not found");
+    }
+
+    const tokens = await this.generateAuthTokens(user.id, user.phoneNo, user.role);
+
+    return { user, tokens };
   }
 }
