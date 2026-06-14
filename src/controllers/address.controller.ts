@@ -2,7 +2,7 @@ import { Response, NextFunction, Request } from "express";
 import { z } from "zod";
 import { AuthRequest } from "../middlewares/auth.middleware";
 import { AddressService } from "../services/address.service";
-import { autocompleteAddress } from "../services/geocode.service";
+import { autocompleteAddress, reverseGeocodeAddress } from "../services/geocode.service";
 import { ApiResponse } from "../utils/apiResponse";
 
 const createSchema = z.object({
@@ -24,6 +24,20 @@ const createSchema = z.object({
 const updateSchema = createSchema.partial();
 
 export class AddressController {
+  static async reverseGeocode(req: Request, res: Response, next: NextFunction) {
+    try {
+      const lat = parseFloat(req.query.lat as string);
+      const lng = parseFloat(req.query.lng as string);
+      if (isNaN(lat) || isNaN(lng)) {
+        return ApiResponse.error(res, 400, "lat and lng are required");
+      }
+      const prediction = await reverseGeocodeAddress(lat, lng);
+      return ApiResponse.success(res, 200, "Reverse geocode successful", { prediction });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async autocomplete(req: Request, res: Response, next: NextFunction) {
     try {
       const input = req.query.input as string;

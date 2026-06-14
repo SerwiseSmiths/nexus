@@ -3,10 +3,12 @@ import bcrypt from "bcryptjs";
 import { config } from "../configs";
 import prisma from "./prisma.service";
 import { sendWhatsAppText } from "./msg91.service";
-import { Role, NotificationType } from "@prisma/client";
+import { Role, NotificationType, WalletLedgerSource } from "@prisma/client";
 import { NotificationService } from '@/services/notification.service';
 import { ApiError } from "../utils/apiResponse";
 import { generateUniqueReferralCode } from "../utils/referralCode";
+import { StrapiService } from '@/services/strapi.service';
+import { WalletService } from '@/services/wallet.service';
 
 const OTP_TTL_MINUTES = 10;
 const OTP_MAX_ATTEMPTS = 5;
@@ -100,6 +102,20 @@ export class AuthService {
       const referralCode = await generateUniqueReferralCode();
       await prisma.user.update({ where: { id: user.id }, data: { referralCode } });
       user = { ...user, referralCode };
+    }
+
+    // Credit welcome bonus for new users if the feature is enabled in CMS
+    if (isNewUser) {
+      const bonus = await StrapiService.fetchWelcomeBonus().catch(() => null);
+      if (bonus?.isEnabled && bonus.amount > 0) {
+        await WalletService.creditWallet({
+          userId: user.id,
+          amount: bonus.amount,
+          source: WalletLedgerSource.CASHBACK,
+          updateBalance: true,
+          meta: { reason: 'welcome_bonus' },
+        }).catch(() => {});
+      }
     }
 
     // Generate tokens

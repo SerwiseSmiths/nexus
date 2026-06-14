@@ -217,6 +217,25 @@ export class StrapiService {
     return addons;
   }
 
+  static async fetchWelcomeBonus(): Promise<{ isEnabled: boolean; amount: number } | null> {
+    const query = `
+      query GetWelcomeBonus {
+        welcomeBonus {
+          isEnabled
+          amount
+        }
+      }
+    `;
+
+    try {
+      const data = await this.gql<{ welcomeBonus: { isEnabled: boolean; amount: number } | null }>(query);
+      return data.welcomeBonus ?? null;
+    } catch (err) {
+      logger.warn('[Strapi] fetchWelcomeBonus failed:', err);
+      return null;
+    }
+  }
+
   static async fetchPartByDocumentId(documentId: string): Promise<ServicePart | null> {
     const qs = new URLSearchParams({
       status: 'published',

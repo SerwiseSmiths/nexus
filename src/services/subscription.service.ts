@@ -45,12 +45,17 @@ export class SubscriptionService {
     const end = new Date(start);
     end.setMonth(end.getMonth() + durationMonths);
 
-    // Build pre-scheduled service visits from CMS plan definition
+    // Build pre-scheduled service visits from CMS plan definition.
+    // Visit 1 is always 5 days after activation (not on the activation date itself)
+    // so the user experiences the ideal usage pattern before their first service.
+    const FIRST_VISIT_OFFSET_MS = 5 * 24 * 60 * 60 * 1000;
     const visitServices = (plan.visit_services ?? [])
       .sort((a, b) => a.visit_number - b.visit_number)
       .map((vs) => {
         const intervalMs = (end.getTime() - start.getTime()) / Math.max(plan.max_services, 1);
-        const scheduledDate = new Date(start.getTime() + intervalMs * (vs.visit_number - 1));
+        const scheduledDate = vs.visit_number === 1
+          ? new Date(start.getTime() + FIRST_VISIT_OFFSET_MS)
+          : new Date(start.getTime() + intervalMs * (vs.visit_number - 1));
         return {
           visitNumber:   vs.visit_number,
           scheduledDate,
@@ -63,7 +68,8 @@ export class SubscriptionService {
         userId,
         deviceTypeKey,
         planKey,
-        planName:    plan.name,
+        planName:       plan.name,
+        planBadgeColor: plan.badge_color ?? null,
         billingCycle,
         planPrice,
         addons:      addons as object[],
