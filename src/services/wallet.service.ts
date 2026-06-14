@@ -137,6 +137,22 @@ export class WalletService {
     );
   }
 
+  private static displayName(user: { firstName: string | null; lastName: string | null; phoneNo: string }): string {
+    return [user.firstName, user.lastName].filter(Boolean).join(' ') || user.phoneNo;
+  }
+
+  private static deriveTitle(
+    source: WalletLedgerSource,
+    type: WalletLedgerType,
+    meta: Prisma.JsonValue | null,
+  ): string {
+    if (source === WalletLedgerSource.TRANSFER) {
+      const name = (meta as { counterpartName?: string } | null)?.counterpartName ?? 'Someone';
+      return type === WalletLedgerType.DEBIT ? `To ${name}` : `From ${name}`;
+    }
+    return type === WalletLedgerType.CREDIT ? 'Fund Added' : 'Fund Deducted';
+  }
+
   static async sendMoney(input: SendMoneyInput) {
     const { senderUserId, recipientPhone, amount } = input;
 
@@ -144,11 +160,16 @@ export class WalletService {
 
     return prisma.$transaction(
       async (tx) => {
-        const recipient = await tx.user.findUnique({
-          where: { phoneNo: recipientPhone, isDeleted: false },
-        });
+        const [recipient, sender] = await Promise.all([
+          tx.user.findUnique({ where: { phoneNo: recipientPhone, isDeleted: false } }),
+           tx.user.findUnique({ where: { id: senderUserId, isDeleted: false } }),
+        ]);
         if (!recipient) throw new ApiError(404, 'Recipient not found');
+        if (!sender)    throw new ApiError(404, 'Sender not found');
         if (recipient.id === senderUserId) throw new ApiError(400, 'Cannot send money to yourself');
+
+        const recipientName = WalletService.displayName(recipient);
+        const senderName    = WalletService.displayName(sender);
 
         const [senderWallet, recipientWallet] = await Promise.all([
           tx.wallet.findUnique({ where: { userId: senderUserId, isDeleted: false } }),
@@ -182,6 +203,7 @@ export class WalletService {
               openingBalance: senderOpening,
               closingBalance: senderClosing,
               updateBalance:  true,
+              meta:           { counterpartName: recipientName } as Prisma.InputJsonValue,
             },
           }),
           tx.walletLedger.create({
@@ -194,6 +216,7 @@ export class WalletService {
               openingBalance: recipientOpening,
               closingBalance: recipientClosing,
               updateBalance:  true,
+              meta:           { counterpartName: senderName } as Prisma.InputJsonValue,
             },
           }),
         ]);
@@ -208,7 +231,7 @@ export class WalletService {
     const { userId, page, limit } = input;
     const skip = (page - 1) * limit;
 
-    const [entries, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       prisma.walletLedger.findMany({
         where:   { userId, isDeleted: false },
         orderBy: { createdAt: 'desc' },
@@ -217,6 +240,11 @@ export class WalletService {
       }),
       prisma.walletLedger.count({ where: { userId, isDeleted: false } }),
     ]);
+
+    const entries = rows.map(e => ({
+      ...e,
+      title: WalletService.deriveTitle(e.source, e.type, e.meta),
+    }));
 
     return {
       entries,

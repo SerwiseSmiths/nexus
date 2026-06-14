@@ -4,8 +4,9 @@ import { auth } from "../middlewares/auth.middleware";
 
 const router = Router();
 
-// Public — no auth needed (used for search suggestions)
+// Public — no auth needed (used for search suggestions / geocoding)
 router.get("/autocomplete", AddressController.autocomplete);
+router.get("/reverse-geocode", AddressController.reverseGeocode);
 
 // Authenticated CRUD
 router.get("/", auth, AddressController.getAll);

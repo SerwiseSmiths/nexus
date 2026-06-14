@@ -468,6 +468,7 @@ model Subscription {
   // Plan snapshot captured at purchase time
   planKey        String             // e.g. "LITE", "STANDARD", "COMPLETE"
   planName       String
+  planBadgeColor String?            // hex color from CMS badge_color
   billingCycle   BillingCycle
   planPrice      Float              // base plan price before addons
   addons         Json               @default("[]") // [{ key, name, price }]
