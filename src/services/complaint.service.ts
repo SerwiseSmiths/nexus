@@ -13,6 +13,7 @@ import type {
   LinkDeviceInput,
   ValidateQrInput,
   ReopenComplaintInput,
+  CompletePaymentInput,
 } from '@/types/complaint.types';
 
 // ---------------------------------------------------------------------------
@@ -544,25 +545,51 @@ export class ComplaintService {
 
   // ─── Link Device ──────────────────────────────────────────────────────────
 
-  static async linkDevice({ complaintId, userId, deviceId, deviceKey }: LinkDeviceInput) {
+  static async linkDevice({ complaintId, requesterId, requesterRole, deviceId, deviceKey }: LinkDeviceInput) {
     const complaint = await prisma.complaint.findFirst({
-      where: { id: complaintId, userId, isDeleted: false },
+      where: { id: complaintId, isDeleted: false },
     });
     if (!complaint) throw new ApiError(404, 'Complaint not found');
 
+    if (requesterRole === Role.PROVIDER) {
+      if (complaint.providerId !== requesterId) {
+        throw new ApiError(403, 'This complaint is not assigned to you');
+      }
+    } else {
+      if (complaint.userId !== requesterId) {
+        throw new ApiError(403, 'Forbidden');
+      }
+    }
+
+    // Device must belong to the complaint's customer
     const device = await prisma.device.findFirst({
-      where: { id: deviceId, userId, isDeleted: false },
+      where: { id: deviceId, userId: complaint.userId, isDeleted: false },
     });
     if (!device) throw new ApiError(404, 'Device not found');
 
-    return prisma.complaint.update({
+    const updated = await prisma.complaint.update({
       where: { id: complaintId },
       data: {
         deviceId,
         deviceKey: deviceKey ?? device.deviceKey,
+        stage:     complaint.stage === ComplaintStage.QR_VALIDATED ? ComplaintStage.ESTIMATION : complaint.stage,
       },
       include: COMPLAINT_INCLUDE,
     });
+
+    if (complaint.stage === ComplaintStage.QR_VALIDATED) {
+      emit(() =>
+        NotificationService.sendToUser({
+          userId:      complaint.userId,
+          title:       'Inspection Started',
+          body:        'Your technician has identified the appliance and started the inspection.',
+          type:        NotificationType.SERVICE,
+          complaintId,
+        }),
+      );
+    }
+
+    return updated;
   }
 
   // ─── Entry QR ─────────────────────────────────────────────────────────────
@@ -807,6 +834,84 @@ export class ComplaintService {
       default:
         throw new ApiError(400, `Cannot advance from stage ${complaint.stage}`);
     }
+  }
+
+  // ─── Complete Payment ─────────────────────────────────────────────────────
+
+  static async completePayment({ complaintId, providerId, method }: CompletePaymentInput) {
+    const complaint = await prisma.complaint.findFirst({
+      where: { id: complaintId, providerId, isDeleted: false },
+      include: { quote: true },
+    });
+    if (!complaint) throw new ApiError(404, 'Complaint not found or not assigned to you');
+    if (complaint.stage !== ComplaintStage.PAYMENT) {
+      throw new ApiError(400, 'Complaint is not in PAYMENT stage');
+    }
+
+    const totalAmount = complaint.quote?.totalAmount ?? 0;
+
+    const updated = await prisma.complaint.update({
+      where: { id: complaintId },
+      data:  { stage: ComplaintStage.COMPLETED },
+      include: COMPLAINT_INCLUDE,
+    });
+
+    // Credit provider wallet
+    if (totalAmount > 0) {
+      const wallet = await prisma.wallet.upsert({
+        where:  { userId: providerId },
+        create: { userId: providerId, balance: 0 },
+        update: {},
+      });
+
+      await prisma.wallet.update({
+        where: { id: wallet.id },
+        data:  { balance: { increment: totalAmount } },
+      });
+
+      await prisma.walletLedger.create({
+        data: {
+          walletId:        wallet.id,
+          userId:          providerId,
+          type:            'CREDIT',
+          source:          'ORDER_PAYMENT',
+          amount:          totalAmount,
+          openingBalance:  wallet.balance,
+          closingBalance:  wallet.balance + totalAmount,
+          paymentProvider: method === 'CASH' ? 'CASH' : 'RAZORPAY',
+          updateBalance:   true,
+          refId:           complaintId,
+        },
+      });
+    }
+
+    emit(() =>
+      RealtimeService.emitStageChanged(
+        updated as unknown as Record<string, unknown>,
+        ComplaintStage.PAYMENT,
+        ComplaintStage.COMPLETED,
+      ),
+    );
+    emit(() =>
+      NotificationService.sendToUser({
+        userId:      complaint.userId,
+        title:       'Service Completed',
+        body:        'Payment received. Your complaint has been closed successfully.',
+        type:        NotificationType.PAYMENT,
+        complaintId,
+      }),
+    );
+    emit(() =>
+      NotificationService.sendToUser({
+        userId:      providerId,
+        title:       'Job Closed',
+        body:        `₹${totalAmount} has been deposited to your wallet.`,
+        type:        NotificationType.PAYMENT,
+        complaintId,
+      }),
+    );
+
+    return updated;
   }
 
   // ─── Delete ───────────────────────────────────────────────────────────────

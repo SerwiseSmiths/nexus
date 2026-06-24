@@ -8,6 +8,8 @@ import {
   type AddDeviceInput,
   type UpdateDeviceInput,
   type AddWorkHistoryInput,
+  type AddDeviceForCustomerInput,
+  type ListCustomerDevicesInput,
 } from '@/types/device.types';
 
 const DEVICE_KEY_TO_TYPE: Record<DeviceKey, DeviceType> = {
@@ -143,6 +145,54 @@ export class DeviceService {
     return prisma.deviceWorkHistory.findMany({
       where: { deviceId, isDeleted: false },
       orderBy: { eventDate: 'desc' },
+    });
+  }
+
+  static async getDevicesByUserId({ targetUserId, addressId }: ListCustomerDevicesInput) {
+    return prisma.device.findMany({
+      where: {
+        userId:    targetUserId,
+        isDeleted: false,
+        ...(addressId && { addressId }),
+      },
+      include: {
+        address: {
+          select: { id: true, title: true, houseNo: true, societyName: true, city: true, state: true },
+        },
+        workHistory: {
+          where: { isDeleted: false },
+          orderBy: { eventDate: 'desc' },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  static async addDeviceForCustomer({
+    targetUserId,
+    deviceKey,
+    addressId,
+    imageUrl,
+    metadata,
+  }: AddDeviceForCustomerInput) {
+    const validator = DEVICE_META_VALIDATORS[deviceKey];
+    if (!validator) throw new ApiError(400, `Unknown device key: ${deviceKey}`);
+
+    const result = validator.safeParse(metadata);
+    if (!result.success) throw new ApiError(400, 'Invalid device metadata', result.error.issues);
+
+    return prisma.device.create({
+      data: {
+        userId:    targetUserId,
+        addressId: addressId ?? null,
+        deviceKey,
+        type:      DEVICE_KEY_TO_TYPE[deviceKey],
+        imageUrl:  imageUrl ?? null,
+        metadata:  result.data,
+      },
+      include: {
+        address: { select: { id: true, title: true, houseNo: true, societyName: true, city: true, state: true } },
+      },
     });
   }
 

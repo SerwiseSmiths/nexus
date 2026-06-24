@@ -174,3 +174,27 @@ export interface AddWorkHistoryInput {
   eventDate: string;
   notes?:    string;
 }
+
+// Provider-facing: add a device on behalf of a customer
+export interface AddDeviceForCustomerBody {
+  targetUserId: string;
+  deviceKey:    DeviceKey;
+  addressId?:   string;
+  imageUrl?:    string;
+  metadata:     Record<string, unknown>;
+}
+
+export interface AddDeviceForCustomerInput {
+  targetUserId: string;
+  providerId:   string;
+  deviceKey:    DeviceKey;
+  addressId?:   string;
+  imageUrl?:    string;
+  metadata:     Record<string, unknown>;
+}
+
+// Provider-facing: list a customer's devices
+export interface ListCustomerDevicesInput {
+  targetUserId: string;
+  addressId?:   string;
+}

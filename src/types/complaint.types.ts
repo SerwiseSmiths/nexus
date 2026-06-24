@@ -52,6 +52,10 @@ export const ReopenComplaintSchema = z.object({
   addressId: z.string().uuid().optional(),
 });
 
+export const CompletePaymentSchema = z.object({
+  method: z.enum(['CASH', 'WALLET']),
+});
+
 // ---------------------------------------------------------------------------
 // Inferred types
 // ---------------------------------------------------------------------------
@@ -64,6 +68,7 @@ export type RespondToQuoteDto     = z.infer<typeof RespondToQuoteSchema>;
 export type LinkDeviceDto         = z.infer<typeof LinkDeviceSchema>;
 export type ValidateQrDto         = z.infer<typeof ValidateQrSchema>;
 export type ReopenComplaintDto    = z.infer<typeof ReopenComplaintSchema>;
+export type CompletePaymentDto    = z.infer<typeof CompletePaymentSchema>;
 
 // ---------------------------------------------------------------------------
 // Request body interfaces (what controllers receive from req.body)
@@ -76,7 +81,8 @@ export interface AddQuoteBody        extends AddQuoteDto {}
 export interface RespondToQuoteBody  extends RespondToQuoteDto {}
 export interface LinkDeviceBody      extends LinkDeviceDto {}
 export interface ValidateQrBody      extends ValidateQrDto {}
-export interface ReopenComplaintBody extends ReopenComplaintDto {}
+export interface ReopenComplaintBody    extends ReopenComplaintDto {}
+export interface CompletePaymentBody   extends CompletePaymentDto {}
 
 // ---------------------------------------------------------------------------
 // Service input interfaces (controller → service)
@@ -106,8 +112,9 @@ export interface RespondToQuoteInput extends RespondToQuoteDto {
 }
 
 export interface LinkDeviceInput extends LinkDeviceDto {
-  complaintId: string;
-  userId:      string;
+  complaintId:   string;
+  requesterId:   string;
+  requesterRole: string;
 }
 
 export interface ValidateQrInput extends ValidateQrDto {
@@ -121,4 +128,9 @@ export interface ReopenComplaintInput {
   title?:      string;
   notes?:      string;
   addressId?:  string;
+}
+
+export interface CompletePaymentInput extends CompletePaymentDto {
+  complaintId: string;
+  providerId:  string;
 }

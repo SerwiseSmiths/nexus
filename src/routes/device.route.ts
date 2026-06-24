@@ -1,6 +1,8 @@
 import { Router } from 'express';
+import { Role } from '@prisma/client';
 import { DeviceController } from '@/controllers/device.controller';
 import { auth } from '@/middlewares/auth.middleware';
+import { authorize } from '@/middlewares/authorize.middleware';
 
 const router = Router();
 
@@ -84,6 +86,59 @@ const router = Router();
  *         description: Unauthorized
  */
 router.post('/', auth, DeviceController.addDevice);
+
+/**
+ * @swagger
+ * /device/for-customer:
+ *   post:
+ *     summary: Add a device on behalf of a customer (PROVIDER)
+ *     description: >
+ *       Provider creates a device record owned by the customer (`targetUserId`).
+ *       Metadata is validated against the device-type schema, same as self-registration.
+ *     tags: [Device]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [targetUserId, deviceKey, metadata]
+ *             properties:
+ *               targetUserId: { type: string, format: uuid }
+ *               deviceKey:    { type: string, example: air_conditioner }
+ *               addressId:    { type: string, format: uuid }
+ *               imageUrl:     { type: string }
+ *               metadata:     { type: object }
+ *     responses:
+ *       201: { description: Device added for customer }
+ *       400: { description: Validation error }
+ */
+router.post('/for-customer', auth, authorize([Role.PROVIDER]), DeviceController.addForCustomer);
+
+/**
+ * @swagger
+ * /device/customer/{userId}:
+ *   get:
+ *     summary: List devices belonging to a specific customer (PROVIDER)
+ *     description: Provider retrieves all devices owned by the given customer, optionally filtered by address.
+ *     tags: [Device]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: addressId
+ *         schema: { type: string, format: uuid }
+ *         description: Filter devices by address
+ *     responses:
+ *       200: { description: Devices fetched }
+ */
+router.get('/customer/:userId', auth, authorize([Role.PROVIDER]), DeviceController.listForCustomer);
 
 /**
  * @swagger
