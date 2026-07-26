@@ -279,7 +279,10 @@ router.delete('/:id', auth, DeviceController.deleteDevice);
  *     summary: Add a work history event to a device
  *     description: >
  *       Records a lifecycle event for the device (e.g. filter change, pump service).
- *       Valid events: PURCHASED, INSTALLED, REPAIR, INSPECTION, UNINSTALLED.
+ *       Valid events: PURCHASED, INSTALLED, REPAIR, INSPECTION, UNINSTALLED, FILTER_CHANGE.
+ *       Note: PURCHASED and INSTALLED are also auto-recorded when a device is added,
+ *       and REPAIR/FILTER_CHANGE are auto-recorded when a complaint's service completes —
+ *       use this endpoint for manual corrections or events outside that flow (e.g. INSPECTION).
  *     tags: [Device]
  *     security:
  *       - bearerAuth: []
@@ -305,6 +308,7 @@ router.delete('/:id', auth, DeviceController.deleteDevice);
  *                   - REPAIR
  *                   - INSPECTION
  *                   - UNINSTALLED
+ *                   - FILTER_CHANGE
  *                 example: REPAIR
  *               eventDate:
  *                 type: string
@@ -441,6 +445,7 @@ router.delete('/:id/work-history/:entryId', auth, DeviceController.deleteWorkHis
  *             - REPAIR
  *             - INSPECTION
  *             - UNINSTALLED
+ *             - FILTER_CHANGE
  *         eventDate: { type: string, format: date-time }
  *         notes:     { type: string, nullable: true }
  *         createdAt: { type: string, format: date-time }

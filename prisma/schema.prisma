@@ -30,6 +30,7 @@ enum WorkHistoryEvent {
   REPAIR
   INSPECTION
   UNINSTALLED
+  FILTER_CHANGE
 }
 
 // ─── Complaint Enums ──────────────────────────────────────────────────────────

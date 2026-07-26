@@ -1,7 +1,8 @@
-import { ComplaintStage, NotificationType, Prisma, QuoteStatus, Role } from '@prisma/client';
+import { ComplaintStage, NotificationType, Prisma, QuoteStatus, Role, WorkHistoryEvent } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import prisma from '@/services/prisma.service';
 import { ApiError } from '@/utils/apiResponse';
+import { logger } from '@/utils/logger';
 import { RealtimeService } from '@/services/realtime.service';
 import { NotificationService } from '@/services/notification.service';
 import type {
@@ -99,6 +100,17 @@ function generateQrExpiry(): Date {
 
 function emit(fn: () => Promise<unknown>): void {
   fn().catch(() => {});
+}
+
+// A quote is treated as a filter change if any line item name mentions "filter" —
+// there's no dedicated category field on quote items today, so this is a
+// best-effort heuristic rather than an authoritative classification.
+function isFilterRelatedQuote(items: unknown): boolean {
+  if (!Array.isArray(items)) return false;
+  return items.some(
+    item => item && typeof (item as { name?: unknown }).name === 'string' &&
+      /filter/i.test((item as { name: string }).name),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -506,6 +518,10 @@ export class ComplaintService {
         }),
       );
 
+      if (nextStage === ComplaintStage.COMPLETED) {
+        await ComplaintService.recordServiceCompletionHistory(complaint.deviceId, complaint.quote.items);
+      }
+
       return updatedComplaint;
     } else {
       // Rejected — send back to ESTIMATION for provider to revise
@@ -838,6 +854,26 @@ export class ComplaintService {
 
   // ─── Complete Payment ─────────────────────────────────────────────────────
 
+  // Auto-records a REPAIR (or FILTER_CHANGE, if the quote looks filter-related)
+  // work-history entry against the linked device whenever a service completes.
+  private static async recordServiceCompletionHistory(
+    deviceId: string | null,
+    quoteItems: unknown,
+  ): Promise<void> {
+    if (!deviceId) return;
+    try {
+      await prisma.deviceWorkHistory.create({
+        data: {
+          deviceId,
+          event: isFilterRelatedQuote(quoteItems) ? WorkHistoryEvent.FILTER_CHANGE : WorkHistoryEvent.REPAIR,
+          eventDate: new Date(),
+        },
+      });
+    } catch (error) {
+      logger.error('Failed to record service completion history', { error, deviceId });
+    }
+  }
+
   static async completePayment({ complaintId, providerId, method }: CompletePaymentInput) {
     const complaint = await prisma.complaint.findFirst({
       where: { id: complaintId, providerId, isDeleted: false },
@@ -855,6 +891,8 @@ export class ComplaintService {
       data:  { stage: ComplaintStage.COMPLETED },
       include: COMPLAINT_INCLUDE,
     });
+
+    await ComplaintService.recordServiceCompletionHistory(complaint.deviceId, complaint.quote?.items);
 
     // Credit provider wallet
     if (totalAmount > 0) {
