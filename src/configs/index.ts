@@ -29,6 +29,13 @@ const envSchema = z.object({
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
   APP_URL: z.string().url().optional(),
   OTA_DEPLOY_API_KEY: z.string().min(32),
+  // Server-side rollback floor: no bundle created before this date is ever
+  // servable again (including explicit rollback), regardless of what
+  // minBundleId a client request sends. Defaults to the policy's original
+  // cutoff so the floor still applies even if Firebase Remote Config is
+  // ever missing this key for an environment (dev/prod) — never silently
+  // falls back to "no floor at all".
+  OTA_MIN_BUNDLE_DATE: z.string().datetime().default('2026-01-01T00:00:00Z'),
 });
 
 export type Config = z.infer<typeof envSchema>;
@@ -102,6 +109,7 @@ export const initializeConfig = async () => {
     appUrl: parsed.APP_URL,
     ota: {
       deployApiKey: parsed.OTA_DEPLOY_API_KEY,
+      minBundleDate: parsed.OTA_MIN_BUNDLE_DATE,
     },
   });
 
