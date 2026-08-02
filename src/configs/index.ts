@@ -28,6 +28,7 @@ const envSchema = z.object({
   RAZORPAY_KEY_SECRET: z.string().optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
   APP_URL: z.string().url().optional(),
+  OTA_DEPLOY_API_KEY: z.string().min(32),
 });
 
 export type Config = z.infer<typeof envSchema>;
@@ -99,6 +100,9 @@ export const initializeConfig = async () => {
       webhookSecret: parsed.RAZORPAY_WEBHOOK_SECRET,
     },
     appUrl: parsed.APP_URL,
+    ota: {
+      deployApiKey: parsed.OTA_DEPLOY_API_KEY,
+    },
   });
 
   return config;
