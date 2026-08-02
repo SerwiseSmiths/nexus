@@ -1,5 +1,6 @@
 import { createUniversalStoragePlugin } from '@hot-updater/plugin-core';
 import fs from 'fs/promises';
+import path from 'path';
 import { cloudinary } from '@/configs/cloudinary.config';
 import { logger } from '@/utils/logger';
 
@@ -9,6 +10,22 @@ const DELIVERY_TYPE = 'authenticated' as const;
 const SIGNED_URL_TTL_SECONDS = 3600;
 
 const publicIdFor = (key: string) => `${BUCKET}/${key}`;
+
+// hot-updater's own deploy pipeline uploads the bundle archive and its
+// manifest with the SAME key (the bundle id) — e.g.
+// `storagePlugin.profiles.node.upload(bundleId, bundlePath)` immediately
+// followed by `storagePlugin.profiles.node.upload(bundleId, manifestPath)`
+// (node_modules/hot-updater/dist/index.mjs) — relying on the storage plugin
+// itself to tell them apart. Without this, the manifest upload silently
+// overwrote the bundle archive at the same Cloudinary public_id (both
+// resolved to identical storage URIs), so devices downloaded the manifest
+// JSON in place of the actual bundle zip and native signature verification
+// failed — not a key mismatch, a storage collision. Fixed by appending the
+// source file's own basename (bundle.zip / manifest.json / per-asset
+// filename), matching hot-updater's reference `supabaseStorage` plugin's
+// exact convention (`getStorageKey(key, path.basename(filePath))`).
+const publicIdForUpload = (key: string, filePath: string) =>
+  publicIdFor(`${key}/${path.basename(filePath)}`);
 
 const parseCloudinaryUri = (storageUri: string) => {
   const withoutProtocol = storageUri.replace(/^cloudinary:\/\//, '');
@@ -47,7 +64,7 @@ export const cloudinaryStorage = createUniversalStoragePlugin<Record<string, nev
   factory: () => ({
     node: {
       async upload(key, filePath) {
-        const publicId = publicIdFor(key);
+        const publicId = publicIdForUpload(key, filePath);
         const result = await cloudinary.uploader.upload(filePath, {
           public_id: publicId,
           resource_type: RESOURCE_TYPE,
