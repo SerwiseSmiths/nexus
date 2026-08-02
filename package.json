@@ -1,6 +1,9 @@
 {
   "name": "nexus",
   "packageManager": "yarn@4.6.0",
+  "resolutions": {
+    "mime": "^3.0.0"
+  },  
   "scripts": {
     "dev": "ts-node-dev -r tsconfig-paths/register --respawn --transpile-only src/server.ts",
     "build": "tsc",
