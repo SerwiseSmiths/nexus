@@ -6,6 +6,7 @@ import type {
   AddDeviceBody,
   UpdateDeviceBody,
   AddWorkHistoryBody,
+  AddDeviceForCustomerBody,
   DeviceKey,
 } from '@/types/device.types';
 
@@ -97,6 +98,39 @@ export class DeviceController {
     try {
       const history = await DeviceService.getWorkHistory(req.params.id as string, req.user!.id);
       return ApiResponse.success(res, 200, 'Work history fetched successfully', { history });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async listForCustomer(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const targetUserId = req.params.userId as string;
+      const addressId    = req.query.addressId as string | undefined;
+      const devices = await DeviceService.getDevicesByUserId({ targetUserId, addressId });
+      return ApiResponse.success(res, 200, 'Customer devices fetched successfully', { devices });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async addForCustomer(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { targetUserId, deviceKey, addressId, imageUrl, metadata } = req.body as AddDeviceForCustomerBody;
+      if (!targetUserId) return ApiResponse.error(res, 400, 'targetUserId is required');
+      if (!deviceKey)    return ApiResponse.error(res, 400, 'deviceKey is required');
+      if (!metadata)     return ApiResponse.error(res, 400, 'metadata is required');
+
+      const device = await DeviceService.addDeviceForCustomer({
+        targetUserId,
+        providerId: req.user!.id,
+        deviceKey:  deviceKey as DeviceKey,
+        addressId,
+        imageUrl,
+        metadata,
+      });
+
+      return ApiResponse.success(res, 201, 'Device added for customer successfully', { device });
     } catch (error) {
       next(error);
     }

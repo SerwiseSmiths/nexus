@@ -11,6 +11,7 @@ import {
   LinkDeviceSchema,
   ValidateQrSchema,
   ReopenComplaintSchema,
+  CompletePaymentSchema,
 } from '@/types/complaint.types';
 
 export class ComplaintController {
@@ -178,12 +179,30 @@ export class ComplaintController {
       if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
 
       const complaint = await ComplaintService.linkDevice({
-        complaintId: req.params.id as string,
-        userId:      req.user!.id,
+        complaintId:   req.params.id as string,
+        requesterId:   req.user!.id,
+        requesterRole: req.user!.role,
         ...parsed.data,
       });
 
       return ApiResponse.success(res, 200, 'Device linked successfully', { complaint });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async completePayment(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const parsed = CompletePaymentSchema.safeParse(req.body);
+      if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
+
+      const complaint = await ComplaintService.completePayment({
+        complaintId: req.params.id as string,
+        providerId:  req.user!.id,
+        ...parsed.data,
+      });
+
+      return ApiResponse.success(res, 200, 'Payment completed successfully', { complaint });
     } catch (error) {
       next(error);
     }

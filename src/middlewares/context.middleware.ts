@@ -6,6 +6,13 @@ export const contextMiddleware = (req: AppContextRequest, res: Response, next: N
   // Razorpay webhook is sent by Razorpay's servers — no x-app-id header
   if (req.originalUrl === '/api/payments/razorpay/webhook') return next();
 
+  // OTA routes are called by hot-updater's native client (public check-update
+  // API, callable by any installed app build with no prior token — same as
+  // AWS's own guidance to never gate that endpoint) and by the deploy CLI
+  // (admin API, gated separately by otaDeployAuth) — neither is a user-facing
+  // app context.
+  if (req.originalUrl.startsWith('/api/ota/')) return next();
+
   const appId = req.headers['x-app-id'];
 
   if (!appId) {

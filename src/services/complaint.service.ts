@@ -1,7 +1,8 @@
-import { ComplaintStage, NotificationType, Prisma, QuoteStatus, Role } from '@prisma/client';
+import { ComplaintStage, NotificationType, Prisma, QuoteStatus, Role, WorkHistoryEvent } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import prisma from '@/services/prisma.service';
 import { ApiError } from '@/utils/apiResponse';
+import { logger } from '@/utils/logger';
 import { RealtimeService } from '@/services/realtime.service';
 import { NotificationService } from '@/services/notification.service';
 import type {
@@ -13,6 +14,7 @@ import type {
   LinkDeviceInput,
   ValidateQrInput,
   ReopenComplaintInput,
+  CompletePaymentInput,
 } from '@/types/complaint.types';
 
 // ---------------------------------------------------------------------------
@@ -98,6 +100,17 @@ function generateQrExpiry(): Date {
 
 function emit(fn: () => Promise<unknown>): void {
   fn().catch(() => {});
+}
+
+// A quote is treated as a filter change if any line item name mentions "filter" —
+// there's no dedicated category field on quote items today, so this is a
+// best-effort heuristic rather than an authoritative classification.
+function isFilterRelatedQuote(items: unknown): boolean {
+  if (!Array.isArray(items)) return false;
+  return items.some(
+    item => item && typeof (item as { name?: unknown }).name === 'string' &&
+      /filter/i.test((item as { name: string }).name),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -505,6 +518,10 @@ export class ComplaintService {
         }),
       );
 
+      if (nextStage === ComplaintStage.COMPLETED) {
+        await ComplaintService.recordServiceCompletionHistory(complaint.deviceId, complaint.quote.items);
+      }
+
       return updatedComplaint;
     } else {
       // Rejected — send back to ESTIMATION for provider to revise
@@ -544,25 +561,51 @@ export class ComplaintService {
 
   // ─── Link Device ──────────────────────────────────────────────────────────
 
-  static async linkDevice({ complaintId, userId, deviceId, deviceKey }: LinkDeviceInput) {
+  static async linkDevice({ complaintId, requesterId, requesterRole, deviceId, deviceKey }: LinkDeviceInput) {
     const complaint = await prisma.complaint.findFirst({
-      where: { id: complaintId, userId, isDeleted: false },
+      where: { id: complaintId, isDeleted: false },
     });
     if (!complaint) throw new ApiError(404, 'Complaint not found');
 
+    if (requesterRole === Role.PROVIDER) {
+      if (complaint.providerId !== requesterId) {
+        throw new ApiError(403, 'This complaint is not assigned to you');
+      }
+    } else {
+      if (complaint.userId !== requesterId) {
+        throw new ApiError(403, 'Forbidden');
+      }
+    }
+
+    // Device must belong to the complaint's customer
     const device = await prisma.device.findFirst({
-      where: { id: deviceId, userId, isDeleted: false },
+      where: { id: deviceId, userId: complaint.userId, isDeleted: false },
     });
     if (!device) throw new ApiError(404, 'Device not found');
 
-    return prisma.complaint.update({
+    const updated = await prisma.complaint.update({
       where: { id: complaintId },
       data: {
         deviceId,
         deviceKey: deviceKey ?? device.deviceKey,
+        stage:     complaint.stage === ComplaintStage.QR_VALIDATED ? ComplaintStage.ESTIMATION : complaint.stage,
       },
       include: COMPLAINT_INCLUDE,
     });
+
+    if (complaint.stage === ComplaintStage.QR_VALIDATED) {
+      emit(() =>
+        NotificationService.sendToUser({
+          userId:      complaint.userId,
+          title:       'Inspection Started',
+          body:        'Your technician has identified the appliance and started the inspection.',
+          type:        NotificationType.SERVICE,
+          complaintId,
+        }),
+      );
+    }
+
+    return updated;
   }
 
   // ─── Entry QR ─────────────────────────────────────────────────────────────
@@ -807,6 +850,106 @@ export class ComplaintService {
       default:
         throw new ApiError(400, `Cannot advance from stage ${complaint.stage}`);
     }
+  }
+
+  // ─── Complete Payment ─────────────────────────────────────────────────────
+
+  // Auto-records a REPAIR (or FILTER_CHANGE, if the quote looks filter-related)
+  // work-history entry against the linked device whenever a service completes.
+  private static async recordServiceCompletionHistory(
+    deviceId: string | null,
+    quoteItems: unknown,
+  ): Promise<void> {
+    if (!deviceId) return;
+    try {
+      await prisma.deviceWorkHistory.create({
+        data: {
+          deviceId,
+          event: isFilterRelatedQuote(quoteItems) ? WorkHistoryEvent.FILTER_CHANGE : WorkHistoryEvent.REPAIR,
+          eventDate: new Date(),
+        },
+      });
+    } catch (error) {
+      logger.error('Failed to record service completion history', { error, deviceId });
+    }
+  }
+
+  static async completePayment({ complaintId, providerId, method }: CompletePaymentInput) {
+    const complaint = await prisma.complaint.findFirst({
+      where: { id: complaintId, providerId, isDeleted: false },
+      include: { quote: true },
+    });
+    if (!complaint) throw new ApiError(404, 'Complaint not found or not assigned to you');
+    if (complaint.stage !== ComplaintStage.PAYMENT) {
+      throw new ApiError(400, 'Complaint is not in PAYMENT stage');
+    }
+
+    const totalAmount = complaint.quote?.totalAmount ?? 0;
+
+    const updated = await prisma.complaint.update({
+      where: { id: complaintId },
+      data:  { stage: ComplaintStage.COMPLETED },
+      include: COMPLAINT_INCLUDE,
+    });
+
+    await ComplaintService.recordServiceCompletionHistory(complaint.deviceId, complaint.quote?.items);
+
+    // Credit provider wallet
+    if (totalAmount > 0) {
+      const wallet = await prisma.wallet.upsert({
+        where:  { userId: providerId },
+        create: { userId: providerId, balance: 0 },
+        update: {},
+      });
+
+      await prisma.wallet.update({
+        where: { id: wallet.id },
+        data:  { balance: { increment: totalAmount } },
+      });
+
+      await prisma.walletLedger.create({
+        data: {
+          walletId:        wallet.id,
+          userId:          providerId,
+          type:            'CREDIT',
+          source:          'ORDER_PAYMENT',
+          amount:          totalAmount,
+          openingBalance:  wallet.balance,
+          closingBalance:  wallet.balance + totalAmount,
+          paymentProvider: method === 'CASH' ? 'CASH' : 'RAZORPAY',
+          updateBalance:   true,
+          refId:           complaintId,
+        },
+      });
+    }
+
+    emit(() =>
+      RealtimeService.emitStageChanged(
+        updated as unknown as Record<string, unknown>,
+        ComplaintStage.PAYMENT,
+        ComplaintStage.COMPLETED,
+      ),
+    );
+    emit(() =>
+      NotificationService.sendToUser({
+        userId:      complaint.userId,
+        title:       'Service Completed',
+        body:        'Payment received. Your complaint has been closed successfully.',
+        type:        NotificationType.PAYMENT,
+        complaintId,
+      }),
+    );
+    emit(() =>
+      NotificationService.sendToUser({
+        userId:      providerId,
+        title:       'Job Closed',
+        body:        `₹${totalAmount} has been deposited to your wallet.`,
+        type:        NotificationType.PAYMENT,
+        complaintId,
+      }),
+    );
+
+    return updated;
   }
 
   // ─── Delete ───────────────────────────────────────────────────────────────

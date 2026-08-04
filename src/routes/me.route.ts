@@ -3,9 +3,28 @@ import { UserController } from '@/controllers/user.controller';
 import { AddressController } from '@/controllers/address.controller';
 import { SubscriptionController } from '@/controllers/subscription.controller';
 import { WalletController } from '@/controllers/wallet.controller';
+import { HomeController } from '@/controllers/home.controller';
 import { auth } from '@/middlewares/auth.middleware';
+import { authorize } from '@/middlewares/authorize.middleware';
+import { Role } from '@prisma/client';
 
 const router = Router();
+
+// ─── Provider Home ─────────────────────────────────────────────────────────────
+
+/**
+ * @swagger
+ * /me/home:
+ *   get:
+ *     summary: Get provider home screen stats (wallet balance, today's earnings, open task count)
+ *     tags: [Me]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Home stats fetched successfully
+ */
+router.get('/home', auth, authorize([Role.PROVIDER]), HomeController.getProviderStats);
 
 // ─── Self (full user + optional relations) ───────────────────────────────────
 

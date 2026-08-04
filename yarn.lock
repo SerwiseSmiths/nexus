@@ -744,6 +744,70 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@hot-updater/bsdiff@npm:0.35.9":
+  version: 0.35.9
+  resolution: "@hot-updater/bsdiff@npm:0.35.9"
+  checksum: 10c0/2357665e6220d71080d22ae8eb42442979197e77768312038ef9070a6315c4d6ae1a2dcc09fdb0b8fb7438c4b8b3d018d0ee83b13197f724c5b0474659d2909d
+  languageName: node
+  linkType: hard
+
+"@hot-updater/core@npm:0.35.9, @hot-updater/core@npm:^0.35.9":
+  version: 0.35.9
+  resolution: "@hot-updater/core@npm:0.35.9"
+  checksum: 10c0/f9b4c700bb961137ab2fe7f854394147778c11c8eb71786ae4b9af83d6360487390d48fbe4fbff7ef552312efc0dc119a07593822f40af459373d5b19c042b1d
+  languageName: node
+  linkType: hard
+
+"@hot-updater/js@npm:0.35.9":
+  version: 0.35.9
+  resolution: "@hot-updater/js@npm:0.35.9"
+  dependencies:
+    "@hot-updater/core": "npm:0.35.9"
+  checksum: 10c0/313ef763797faed83cba7be62c5b919ca7e2cfc9213040bbf30d33d6aef00e51a55a9513d5778d2d18bb3ddb95d66a7872c715ffbe22f15dd377d611f2cf8eb8
+  languageName: node
+  linkType: hard
+
+"@hot-updater/plugin-core@npm:0.35.9, @hot-updater/plugin-core@npm:^0.35.9":
+  version: 0.35.9
+  resolution: "@hot-updater/plugin-core@npm:0.35.9"
+  dependencies:
+    "@hot-updater/core": "npm:0.35.9"
+    "@hot-updater/js": "npm:0.35.9"
+    es-toolkit: "npm:^1.32.0"
+    mime: "npm:^4.0.4"
+    semver: "npm:^7.7.2"
+  checksum: 10c0/f252de83014e7b97fc4b1cc752592eb2f150dde5f716df66072cd6874ff6cbc5bf914b88350b342df8486384630ba23a5371b829ac8f5e238c5971b53855a7aa
+  languageName: node
+  linkType: hard
+
+"@hot-updater/server@npm:^0.35.9":
+  version: 0.35.9
+  resolution: "@hot-updater/server@npm:0.35.9"
+  dependencies:
+    "@hot-updater/bsdiff": "npm:0.35.9"
+    "@hot-updater/core": "npm:0.35.9"
+    "@hot-updater/js": "npm:0.35.9"
+    "@hot-updater/plugin-core": "npm:0.35.9"
+    rou3: "npm:0.7.9"
+    semver: "npm:^7.7.2"
+  peerDependencies:
+    "@prisma/client": "*"
+    drizzle-orm: "*"
+    kysely: "*"
+    mongodb: "*"
+  peerDependenciesMeta:
+    "@prisma/client":
+      optional: true
+    drizzle-orm:
+      optional: true
+    kysely:
+      optional: true
+    mongodb:
+      optional: true
+  checksum: 10c0/7a2b410334dda9d7332fa680ff739ef5f975fce58c8b2fb3f6d39df6d18bbf2c6c522ab0875601960fc02de225fe106de4f3bfcbd60e829254c361e0e606ebeb
+  languageName: node
+  linkType: hard
+
 "@humanfs/core@npm:^0.19.1":
   version: 0.19.1
   resolution: "@humanfs/core@npm:0.19.1"
@@ -1753,6 +1817,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@types/multer@npm:^2.2.0":
+  version: 2.2.0
+  resolution: "@types/multer@npm:2.2.0"
+  dependencies:
+    "@types/express": "npm:*"
+  checksum: 10c0/72472c2da0a9afe86e2d64cfec53f4564727affcb691f78fcbdef495978857903f03326e4ecf58f6d1c3c4c89bb39e5d94fb97d4722a1f448f777c4fa690754b
+  languageName: node
+  linkType: hard
+
 "@types/node@npm:*, @types/node@npm:>=13.7.0, @types/node@npm:^25.6.0":
   version: 25.6.0
   resolution: "@types/node@npm:25.6.0"
@@ -2298,6 +2371,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"append-field@npm:^1.0.0":
+  version: 1.0.0
+  resolution: "append-field@npm:1.0.0"
+  checksum: 10c0/1b5abcc227e5179936a9e4f7e2af4769fa1f00eda85bbaed907f7964b0fd1f7d61f0f332b35337f391389ff13dd5310c2546ba670f8e5a743b23ec85185c73ef
+  languageName: node
+  linkType: hard
+
 "arg@npm:^4.1.0":
   version: 4.1.3
   resolution: "arg@npm:4.1.3"
@@ -2612,6 +2692,15 @@ __metadata:
   version: 1.1.2
   resolution: "buffer-from@npm:1.1.2"
   checksum: 10c0/124fff9d66d691a86d3b062eff4663fe437a9d9ee4b47b1b9e97f5a5d14f6d5399345db80f796827be7c95e70a8e765dd404b7c3ff3b3324f98e9b0c8826cc34
+  languageName: node
+  linkType: hard
+
+"busboy@npm:^1.6.0":
+  version: 1.6.0
+  resolution: "busboy@npm:1.6.0"
+  dependencies:
+    streamsearch: "npm:^1.1.0"
+  checksum: 10c0/fa7e836a2b82699b6e074393428b91ae579d4f9e21f5ac468e1b459a244341d722d2d22d10920cdd849743dbece6dca11d72de939fb75a7448825cf2babfba1f
   languageName: node
   linkType: hard
 
@@ -2947,6 +3036,18 @@ __metadata:
   version: 0.0.1
   resolution: "concat-map@npm:0.0.1"
   checksum: 10c0/c996b1cfdf95b6c90fee4dae37e332c8b6eb7d106430c17d538034c0ad9a1630cb194d2ab37293b1bdd4d779494beee7786d586a50bd9376fd6f7bcc2bd4c98f
+  languageName: node
+  linkType: hard
+
+"concat-stream@npm:^2.0.0":
+  version: 2.0.0
+  resolution: "concat-stream@npm:2.0.0"
+  dependencies:
+    buffer-from: "npm:^1.0.0"
+    inherits: "npm:^2.0.3"
+    readable-stream: "npm:^3.0.2"
+    typedarray: "npm:^0.0.6"
+  checksum: 10c0/29565dd9198fe1d8cf57f6cc71527dbc6ad67e12e4ac9401feb389c53042b2dceedf47034cbe702dfc4fd8df3ae7e6bfeeebe732cc4fa2674e484c13f04c219a
   languageName: node
   linkType: hard
 
@@ -3355,6 +3456,20 @@ __metadata:
     has-tostringtag: "npm:^1.0.2"
     hasown: "npm:^2.0.2"
   checksum: 10c0/ef2ca9ce49afe3931cb32e35da4dcb6d86ab02592cfc2ce3e49ced199d9d0bb5085fc7e73e06312213765f5efa47cc1df553a6a5154584b21448e9fb8355b1af
+  languageName: node
+  linkType: hard
+
+"es-toolkit@npm:^1.32.0":
+  version: 1.50.0
+  resolution: "es-toolkit@npm:1.50.0"
+  dependenciesMeta:
+    "@trivago/prettier-plugin-sort-imports@4.3.0":
+      unplugged: true
+    prettier-plugin-sort-re-exports@0.0.1:
+      unplugged: true
+    vitepress-plugin-sandpack@1.1.4:
+      unplugged: true
+  checksum: 10c0/80e3a212d337df6f20ed0330d1b62dda25f3ef6d4c83a33f13d521ccbf5b4ad1ac3e7e638572abd6080627f522707de76a5c9360350b713e5392739083ee1f24
   languageName: node
   linkType: hard
 
@@ -5595,6 +5710,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"media-typer@npm:0.3.0":
+  version: 0.3.0
+  resolution: "media-typer@npm:0.3.0"
+  checksum: 10c0/d160f31246907e79fed398470285f21bafb45a62869dc469b1c8877f3f064f5eabc4bcc122f9479b8b605bc5c76187d7871cf84c4ee3ecd3e487da1993279928
+  languageName: node
+  linkType: hard
+
 "media-typer@npm:^1.1.0":
   version: 1.1.0
   resolution: "media-typer@npm:1.1.0"
@@ -5630,7 +5752,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"mime-types@npm:^2.1.12, mime-types@npm:^2.1.35":
+"mime-types@npm:^2.1.12, mime-types@npm:^2.1.35, mime-types@npm:~2.1.24":
   version: 2.1.35
   resolution: "mime-types@npm:2.1.35"
   dependencies:
@@ -5824,6 +5946,18 @@ __metadata:
   languageName: node
   linkType: hard
 
+"multer@npm:^2.2.0":
+  version: 2.2.0
+  resolution: "multer@npm:2.2.0"
+  dependencies:
+    append-field: "npm:^1.0.0"
+    busboy: "npm:^1.6.0"
+    concat-stream: "npm:^2.0.0"
+    type-is: "npm:^1.6.18"
+  checksum: 10c0/7aa366d89042427347b6ab8e4a203405d7fe942e4a3095648a14526fcf3691d98ffc2da62abf85d8aca0a341f828168eb197b33cfdcfcce29d6ef593a5625591
+  languageName: node
+  linkType: hard
+
 "napi-postinstall@npm:^0.3.0":
   version: 0.3.4
   resolution: "napi-postinstall@npm:0.3.4"
@@ -5858,6 +5992,9 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "nexus@workspace:."
   dependencies:
+    "@hot-updater/core": "npm:^0.35.9"
+    "@hot-updater/plugin-core": "npm:^0.35.9"
+    "@hot-updater/server": "npm:^0.35.9"
     "@prisma/client": "npm:^6.18.0"
     "@supabase/supabase-js": "npm:^2.105.4"
     "@types/bcryptjs": "npm:^3.0.0"
@@ -5869,6 +6006,7 @@ __metadata:
     "@types/jsonwebtoken": "npm:^9.0.10"
     "@types/module-alias": "npm:^2.0.4"
     "@types/morgan": "npm:^1.9.10"
+    "@types/multer": "npm:^2.2.0"
     "@types/node": "npm:^25.6.0"
     "@types/swagger-jsdoc": "npm:^6.0.4"
     "@types/swagger-ui-express": "npm:^4.1.8"
@@ -5892,6 +6030,7 @@ __metadata:
     lint-staged: "npm:^16.4.0"
     module-alias: "npm:^2.3.4"
     morgan: "npm:^1.10.1"
+    multer: "npm:^2.2.0"
     prettier: "npm:^3.8.2"
     prisma: "npm:^6.18.0"
     swagger-jsdoc: "npm:^6.2.8"
@@ -6502,7 +6641,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"readable-stream@npm:^3.1.1, readable-stream@npm:^3.4.0, readable-stream@npm:^3.6.2":
+"readable-stream@npm:^3.0.2, readable-stream@npm:^3.1.1, readable-stream@npm:^3.4.0, readable-stream@npm:^3.6.2":
   version: 3.6.2
   resolution: "readable-stream@npm:3.6.2"
   dependencies:
@@ -6623,6 +6762,13 @@ __metadata:
   bin:
     rimraf: ./bin.js
   checksum: 10c0/4eef73d406c6940927479a3a9dee551e14a54faf54b31ef861250ac815172bade86cc6f7d64a4dc5e98b65e4b18a2e1c9ff3b68d296be0c748413f092bb0dd40
+  languageName: node
+  linkType: hard
+
+"rou3@npm:0.7.9":
+  version: 0.7.9
+  resolution: "rou3@npm:0.7.9"
+  checksum: 10c0/d045d5cfc042fcbef7f95f63f919683573a6ae4daf50c22f6b03b76c7fb52af98485593b56be6d98bd69dd4f49074b492cae38fef4cccefe9dbc3147a9428396
   languageName: node
   linkType: hard
 
@@ -6935,6 +7081,13 @@ __metadata:
   version: 1.0.3
   resolution: "stream-shift@npm:1.0.3"
   checksum: 10c0/939cd1051ca750d240a0625b106a2b988c45fb5a3be0cebe9a9858cb01bc1955e8c7b9fac17a9462976bea4a7b704e317c5c2200c70f0ca715a3363b9aa4fd3b
+  languageName: node
+  linkType: hard
+
+"streamsearch@npm:^1.1.0":
+  version: 1.1.0
+  resolution: "streamsearch@npm:1.1.0"
+  checksum: 10c0/fbd9aecc2621364384d157f7e59426f4bfd385e8b424b5aaa79c83a6f5a1c8fd2e4e3289e95de1eb3511cb96bb333d6281a9919fafce760e4edb35b2cd2facab
   languageName: node
   linkType: hard
 
@@ -7434,6 +7587,16 @@ __metadata:
   languageName: node
   linkType: hard
 
+"type-is@npm:^1.6.18":
+  version: 1.6.18
+  resolution: "type-is@npm:1.6.18"
+  dependencies:
+    media-typer: "npm:0.3.0"
+    mime-types: "npm:~2.1.24"
+  checksum: 10c0/a23daeb538591b7efbd61ecf06b6feb2501b683ffdc9a19c74ef5baba362b4347e42f1b4ed81f5882a8c96a3bfff7f93ce3ffaf0cbbc879b532b04c97a55db9d
+  languageName: node
+  linkType: hard
+
 "type-is@npm:^2.0.1":
   version: 2.0.1
   resolution: "type-is@npm:2.0.1"
@@ -7442,6 +7605,13 @@ __metadata:
     media-typer: "npm:^1.1.0"
     mime-types: "npm:^3.0.0"
   checksum: 10c0/7f7ec0a060b16880bdad36824ab37c26019454b67d73e8a465ed5a3587440fbe158bc765f0da68344498235c877e7dbbb1600beccc94628ed05599d667951b99
+  languageName: node
+  linkType: hard
+
+"typedarray@npm:^0.0.6":
+  version: 0.0.6
+  resolution: "typedarray@npm:0.0.6"
+  checksum: 10c0/6005cb31df50eef8b1f3c780eb71a17925f3038a100d82f9406ac2ad1de5eb59f8e6decbdc145b3a1f8e5836e17b0c0002fb698b9fe2516b8f9f9ff602d36412
   languageName: node
   linkType: hard
 

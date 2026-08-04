@@ -12,6 +12,7 @@ import partsRoutes from './parts.route';
 import deviceTypesRoutes from './device-types.route';
 import paymentRoutes from './payment.route';
 import subscriptionRoutes from './subscription.route';
+import otaRoutes from './ota.route';
 import { RealtimeService } from '@/services/realtime.service';
 import { getSupabaseConfig } from '@/configs/supabase.config';
 
@@ -30,6 +31,7 @@ router.use('/parts', partsRoutes);
 router.use('/device-types', deviceTypesRoutes);
 router.use('/payments', paymentRoutes);
 router.use('/subscription', subscriptionRoutes);
+router.use('/ota', otaRoutes);
 
 // ─── Dev-only: test Supabase broadcast ───────────────────────────────────────
 // POST /api/debug/broadcast  { userId, event?, payload? }

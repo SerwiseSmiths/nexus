@@ -30,6 +30,7 @@ enum WorkHistoryEvent {
   REPAIR
   INSPECTION
   UNINSTALLED
+  FILTER_CHANGE
 }
 
 // ─── Complaint Enums ──────────────────────────────────────────────────────────
@@ -508,4 +509,53 @@ model SubscriptionService {
   updatedAt      DateTime     @updatedAt
 
   @@index([subscriptionId])
+}
+
+// ─── OTA (hot-updater) Models ──────────────────────────────────────────────────
+// NOTE: model/field names below are snake_case, breaking from this file's usual
+// PascalCase-model / camelCase-field convention. This is required, not stylistic:
+// hot-updater's own Prisma adapter (@hot-updater/server, adapters/prisma.ts) does
+// `prisma["bundles"]` / `prisma["bundle_patches"]` and reads raw row keys like
+// `row["target_app_version"]` directly, so the Prisma client's generated property
+// names and returned row keys must literally match these strings. Scoped to only
+// these two models — see d:\Serwise-bundle\ota-migration\TRACKING.md.
+
+model bundles {
+  id                     String           @id @default(uuid())
+  platform               String
+  should_force_update    Boolean
+  enabled                Boolean
+  file_hash              String
+  git_commit_hash        String?
+  message                String?
+  channel                String           @default("production")
+  storage_uri            String
+  target_app_version     String?
+  fingerprint_hash       String?
+  metadata               Json             @default("{}")
+  rollout_cohort_count   Int              @default(1000)
+  target_cohorts         Json?
+  manifest_storage_uri   String?
+  manifest_file_hash     String?
+  asset_base_storage_uri String?
+  patches                bundle_patches[] @relation("bundle_patches_bundles_patches")
+
+  @@index([target_app_version])
+  @@index([fingerprint_hash])
+  @@index([channel])
+  @@index([rollout_cohort_count])
+}
+
+model bundle_patches {
+  id                String  @id
+  bundle_id         String
+  base_bundle_id    String
+  base_file_hash    String
+  patch_file_hash   String
+  patch_storage_uri String
+  order_index       Int     @default(0)
+  bundle            bundles @relation("bundle_patches_bundles_patches", fields: [bundle_id], references: [id])
+
+  @@index([bundle_id])
+  @@index([base_bundle_id])
 }

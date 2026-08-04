@@ -295,7 +295,11 @@ router.patch(
  * @swagger
  * /complaint/{id}/device:
  *   patch:
- *     summary: Link a device to a complaint (CUSTOMER)
+ *     summary: Link a device to a complaint (CUSTOMER or PROVIDER)
+ *     description: >
+ *       Customer can link a device they own. Provider can link a device that belongs
+ *       to the complaint's customer when the complaint is in QR_VALIDATED stage;
+ *       linking auto-advances the complaint to ESTIMATION.
  *     tags: [Complaint]
  *     security:
  *       - bearerAuth: []
@@ -313,12 +317,49 @@ router.patch(
  *               deviceKey: { type: string, example: master_purifier }
  *     responses:
  *       200: { description: Device linked }
+ *       403: { description: Forbidden }
  */
 router.patch(
   '/:id/device',
   auth,
-  authorize([Role.CUSTOMER]),
+  authorize([Role.CUSTOMER, Role.PROVIDER]),
   ComplaintController.linkDevice,
+);
+
+/**
+ * @swagger
+ * /complaint/{id}/complete-payment:
+ *   patch:
+ *     summary: Mark payment as collected and close the complaint (PROVIDER)
+ *     description: >
+ *       Moves complaint from PAYMENT → COMPLETED, credits provider wallet,
+ *       and fires FCM notifications to both customer and provider.
+ *     tags: [Complaint]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [method]
+ *             properties:
+ *               method:
+ *                 type: string
+ *                 enum: [CASH, WALLET]
+ *     responses:
+ *       200: { description: Payment completed, complaint closed }
+ *       400: { description: Complaint not in PAYMENT stage }
+ *       403: { description: Not the assigned provider }
+ */
+router.patch(
+  '/:id/complete-payment',
+  auth,
+  authorize([Role.PROVIDER]),
+  ComplaintController.completePayment,
 );
 
 // ─── QR Entry ─────────────────────────────────────────────────────────────────

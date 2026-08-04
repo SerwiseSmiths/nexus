@@ -1,6 +1,9 @@
 {
   "name": "nexus",
   "packageManager": "yarn@4.6.0",
+  "resolutions": {
+    "mime": "^3.0.0"
+  },  
   "scripts": {
     "dev": "ts-node-dev -r tsconfig-paths/register --respawn --transpile-only src/server.ts",
     "build": "tsc",
@@ -21,6 +24,9 @@
     "@": "dist"
   },
   "dependencies": {
+    "@hot-updater/core": "^0.35.9",
+    "@hot-updater/plugin-core": "^0.35.9",
+    "@hot-updater/server": "^0.35.9",
     "@prisma/client": "^6.18.0",
     "@supabase/supabase-js": "^2.105.4",
     "axios": "^1.15.0",
@@ -35,6 +41,7 @@
     "jsonwebtoken": "^9.0.3",
     "module-alias": "^2.3.4",
     "morgan": "^1.10.1",
+    "multer": "^2.2.0",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
     "tsconfig-paths": "^4.2.0",
@@ -52,6 +59,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/module-alias": "^2.0.4",
     "@types/morgan": "^1.9.10",
+    "@types/multer": "^2.2.0",
     "@types/node": "^25.6.0",
     "@types/swagger-jsdoc": "^6.0.4",
     "@types/swagger-ui-express": "^4.1.8",
