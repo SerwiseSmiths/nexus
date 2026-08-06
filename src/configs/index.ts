@@ -28,7 +28,11 @@ const envSchema = z.object({
   RAZORPAY_KEY_SECRET: z.string().optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
   APP_URL: z.string().url().optional(),
-  OTA_DEPLOY_API_KEY: z.string().min(32),
+  // Separate deploy keys per app — enforces that a radix deploy can only
+  // touch radix-* channels and a serwise deploy can only touch serwise-*
+  // channels (see otaServer.service.ts's scopedDatabaseForApp).
+  RADIX_OTA_DEPLOY_API_KEY: z.string().min(32),
+  SERWISE_OTA_DEPLOY_API_KEY: z.string().min(32),
   // Server-side rollback floor: no bundle created before this date is ever
   // servable again (including explicit rollback), regardless of what
   // minBundleId a client request sends. Defaults to the policy's original
@@ -108,7 +112,8 @@ export const initializeConfig = async () => {
     },
     appUrl: parsed.APP_URL,
     ota: {
-      deployApiKey: parsed.OTA_DEPLOY_API_KEY,
+      radixDeployApiKey: parsed.RADIX_OTA_DEPLOY_API_KEY,
+      serwiseDeployApiKey: parsed.SERWISE_OTA_DEPLOY_API_KEY,
       minBundleDate: parsed.OTA_MIN_BUNDLE_DATE,
     },
   });
