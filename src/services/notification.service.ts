@@ -49,6 +49,7 @@ export class NotificationService {
     type,
     complaintId,
     metadata,
+    dataOnly,
   }: SendNotificationInput) {
     // Persist notification record first
     const notification = await prisma.notification.create({
@@ -87,6 +88,7 @@ export class NotificationService {
       const fcmData: Record<string, string> = {
         notificationId: notification.id,
         type:           type ?? NotificationType.SERVICE,
+        ...(dataOnly && { title, body }),
         ...(complaintId && { complaintId }),
         ...(metadata &&
           Object.fromEntries(
@@ -96,7 +98,7 @@ export class NotificationService {
 
       const response = await messaging.sendEachForMulticast({
         tokens:       tokens.map(t => t.token),
-        notification: { title, body },
+        ...(!dataOnly && { notification: { title, body } }),
         data:         fcmData,
         android:      { priority: 'high' },
         apns:         { payload: { aps: { contentAvailable: true } } },

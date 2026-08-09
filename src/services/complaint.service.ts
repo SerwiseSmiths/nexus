@@ -345,6 +345,10 @@ export class ComplaintService {
         body:        `You have been assigned a new service complaint: "${complaint.title}"`,
         type:        NotificationType.COMPLAINT,
         complaintId,
+        // Data-only — lets the provider app show a full-screen incoming-job
+        // popup even when backgrounded/locked, instead of a plain tray notification.
+        dataOnly:    true,
+        metadata:    { event: 'complaint_assigned' },
       }),
     );
     emit(() =>
