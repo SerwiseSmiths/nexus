@@ -21,8 +21,10 @@ export const sendOtpSms = async (
 
   const recipientNumber = normalizePhoneForHanuOtp(options.recipientNumber);
 
+  logger.info(`HanuOTP: sending OTP to ${recipientNumber} (templateSid=${templateSid})`);
+
   try {
-    await axios.get(HANUOTP_BASE, {
+    const response = await axios.get(HANUOTP_BASE, {
       params: {
         number: recipientNumber,
         OTP: options.otp,
@@ -31,6 +33,14 @@ export const sendOtpSms = async (
       },
       timeout: 15000,
     });
+
+    logger.info(`HanuOTP: response for ${recipientNumber} - ${JSON.stringify(response.data)}`);
+
+    if (response.data?.status === "error") {
+      const errorMessage = response.data?.message || "Unknown HanuOTP error";
+      logger.error(`HanuOTP send failed for ${recipientNumber}: ${errorMessage}`);
+      return { success: false, error: errorMessage };
+    }
 
     return { success: true };
   } catch (err) {
@@ -44,7 +54,7 @@ export const sendOtpSms = async (
       axiosError.message ||
       "Unknown HanuOTP error";
 
-    logger.error(`HanuOTP send failed: ${errorMessage}`);
+    logger.error(`HanuOTP send failed for ${recipientNumber}: ${errorMessage}`);
     return {
       success: false,
       error: errorMessage,
@@ -54,8 +64,8 @@ export const sendOtpSms = async (
 
 function normalizePhoneForHanuOtp(phone: string): string {
   const digits = phone.replace(/\D/g, "");
-  if (digits.length <= 10) {
-    return "91" + digits;
+  if (digits.length > 10 && digits.startsWith("91")) {
+    return digits.slice(-10);
   }
   return digits;
 }

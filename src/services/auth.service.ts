@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { config } from "../configs";
 import prisma from "./prisma.service";
 import { sendOtpSms } from "./hanuotp.service";
+import { logger } from "@/utils/logger";
 import { Role, NotificationType, WalletLedgerSource } from "@prisma/client";
 import { NotificationService } from '@/services/notification.service';
 import { ApiError } from "../utils/apiResponse";
@@ -44,12 +45,20 @@ export class AuthService {
 
     // Send via HanuOTP if not a test phone
     if (phoneNo in TEST_PHONES) {
-      console.log(`[TEST] OTP for ${phoneNo}: ${TEST_PHONES[phoneNo]}`);
+      logger.info(`[TEST] OTP for ${phoneNo}: ${TEST_PHONES[phoneNo]}`);
     } else {
-      await sendOtpSms({
+      logger.info(`generateOtp: requesting HanuOTP send for ${phoneNo}`);
+      const result = await sendOtpSms({
         recipientNumber: phoneNo,
         otp: otpCode,
       });
+
+      if (!result.success) {
+        logger.error(`generateOtp: HanuOTP failed to send to ${phoneNo}: ${result.error}`);
+        throw new ApiError(502, "Failed to send OTP. Please try again.");
+      }
+
+      logger.info(`generateOtp: HanuOTP send succeeded for ${phoneNo}`);
     }
 
     return { ttlMinutes: OTP_TTL_MINUTES };
