@@ -12,10 +12,8 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(8),
   JWT_ACCESS_EXPIRY: z.string().default('30d'),
   JWT_REFRESH_EXPIRY: z.string().default('60d'),
-  MSG91_AUTH_KEY: z.string().optional(),
-  MSG91_WHATSAPP_INTEGRATED_NUMBER: z.string().optional(),
-  MSG91_TEMPLATE_NAME: z.string().default('verify'),
-  MSG91_TEMPLATE_NAMESPACE: z.string().optional(),
+  HANUOTP_API_KEY: z.string().optional(),
+  HANUOTP_TEMPLATE_SID: z.string().default('default'),
   CLOUDINARY_CLOUD_NAME: z.string().min(1),
   CLOUDINARY_API_KEY: z.string().min(1),
   CLOUDINARY_API_SECRET: z.string().min(1),
@@ -50,7 +48,7 @@ let config: any = {
     origin: '*',
   },
   jwt: {},
-  msg91: {},
+  hanuOtp: {},
 };
 
 export const initializeConfig = async () => {
@@ -87,11 +85,9 @@ export const initializeConfig = async () => {
       accessExpiry: parsed.JWT_ACCESS_EXPIRY,
       refreshExpiry: parsed.JWT_REFRESH_EXPIRY,
     },
-    msg91: {
-      authKey: parsed.MSG91_AUTH_KEY,
-      integratedNumber: parsed.MSG91_WHATSAPP_INTEGRATED_NUMBER,
-      templateName: parsed.MSG91_TEMPLATE_NAME,
-      templateNamespace: parsed.MSG91_TEMPLATE_NAMESPACE,
+    hanuOtp: {
+      apiKey: parsed.HANUOTP_API_KEY,
+      templateSid: parsed.HANUOTP_TEMPLATE_SID,
     },
     cloudinary: {
       cloudName: parsed.CLOUDINARY_CLOUD_NAME,
@@ -144,7 +140,7 @@ export const startConfigPolling = (): void => {
       Object.assign(config, {
         supabase:    { url: parsed.SUPABASE_URL, serviceRoleKey: parsed.SUPABASE_SERVICE_ROLE_KEY },
         cloudinary:  { cloudName: parsed.CLOUDINARY_CLOUD_NAME, apiKey: parsed.CLOUDINARY_API_KEY, apiSecret: parsed.CLOUDINARY_API_SECRET },
-        msg91:       { authKey: parsed.MSG91_AUTH_KEY, integratedNumber: parsed.MSG91_WHATSAPP_INTEGRATED_NUMBER, templateName: parsed.MSG91_TEMPLATE_NAME, templateNamespace: parsed.MSG91_TEMPLATE_NAMESPACE },
+        hanuOtp:     { apiKey: parsed.HANUOTP_API_KEY, templateSid: parsed.HANUOTP_TEMPLATE_SID },
         razorpay:    { keyId: parsed.RAZORPAY_KEY_ID, keySecret: parsed.RAZORPAY_KEY_SECRET, webhookSecret: parsed.RAZORPAY_WEBHOOK_SECRET },
         olaMapsApiKey: parsed.OLA_MAPS_API_KEY,
         strapiUrl:   parsed.STRAPI_URL,

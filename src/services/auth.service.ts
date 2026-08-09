@@ -2,7 +2,7 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { config } from "../configs";
 import prisma from "./prisma.service";
-import { sendWhatsAppText } from "./msg91.service";
+import { sendOtpSms } from "./hanuotp.service";
 import { Role, NotificationType, WalletLedgerSource } from "@prisma/client";
 import { NotificationService } from '@/services/notification.service';
 import { ApiError } from "../utils/apiResponse";
@@ -42,13 +42,13 @@ export class AuthService {
       },
     });
 
-    // Send via Msg91 if not a test phone
+    // Send via HanuOTP if not a test phone
     if (phoneNo in TEST_PHONES) {
       console.log(`[TEST] OTP for ${phoneNo}: ${TEST_PHONES[phoneNo]}`);
     } else {
-      await sendWhatsAppText({
+      await sendOtpSms({
         recipientNumber: phoneNo,
-        text: otpCode,
+        otp: otpCode,
       });
     }
 
