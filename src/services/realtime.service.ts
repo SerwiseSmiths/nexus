@@ -35,9 +35,14 @@ export class RealtimeService {
 
     const channel = supabase.channel(channelName);
 
+    const disconnect = (reason: string) => {
+      logger.info(`[Realtime] disconnect — channel=${channelName} reason=${reason}`);
+      supabase.removeChannel(channel);
+    };
+
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
-        supabase.removeChannel(channel);
+        disconnect('timeout');
         reject(new Error(`[Realtime] broadcast timed out — channel=${channelName}`));
       }, 10_000);
 
@@ -46,25 +51,29 @@ export class RealtimeService {
 
         if (err) {
           clearTimeout(timeout);
-          supabase.removeChannel(channel);
+          logger.error(`[Realtime] channel error — channel=${channelName}`, { error: err.message });
+          disconnect('error');
           reject(err);
           return;
         }
 
         if (status === 'SUBSCRIBED') {
+          logger.info(`[Realtime] connected — channel=${channelName}`);
           channel
             .send({ type: 'broadcast', event, payload })
             .then((sendStatus) => {
               clearTimeout(timeout);
               logger.info(`[Realtime] broadcast send status`, { channel: channelName, event, sendStatus });
-              supabase.removeChannel(channel);
+              disconnect('sent');
               resolve();
             })
             .catch((sendErr: unknown) => {
               clearTimeout(timeout);
-              supabase.removeChannel(channel);
+              disconnect('send_failed');
               reject(sendErr);
             });
+        } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          logger.warn(`[Realtime] disconnected — channel=${channelName} status=${status}`);
         }
       });
     });
@@ -94,7 +103,16 @@ export class RealtimeService {
     event: string,
     payload: BroadcastPayload,
   ): Promise<void> {
-    await this.broadcast(`provider:${providerId}`, event, payload);
+    try {
+      await this.broadcast(`provider:${providerId}`, event, payload);
+      logger.info(`[Realtime] ✓ ${event} delivered — providerId=${providerId}`);
+    } catch (err: any) {
+      logger.error(`[Realtime] ✗ ${event} FAILED — providerId=${providerId}`, {
+        status:  err?.response?.status,
+        data:    err?.response?.data ?? err?.responseData,
+        message: err?.message,
+      });
+    }
   }
 
   // ─── Complaint-specific events ────────────────────────────────────────────
