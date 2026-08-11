@@ -197,4 +197,5 @@ export interface AddDeviceForCustomerInput {
 export interface ListCustomerDevicesInput {
   targetUserId: string;
   addressId?:   string;
+  deviceKey?:   string;
 }

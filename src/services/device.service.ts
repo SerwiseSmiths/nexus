@@ -162,12 +162,13 @@ export class DeviceService {
     });
   }
 
-  static async getDevicesByUserId({ targetUserId, addressId }: ListCustomerDevicesInput) {
+  static async getDevicesByUserId({ targetUserId, addressId, deviceKey }: ListCustomerDevicesInput) {
     return prisma.device.findMany({
       where: {
         userId:    targetUserId,
         isDeleted: false,
         ...(addressId && { addressId }),
+        ...(deviceKey && { deviceKey }),
       },
       include: {
         address: {

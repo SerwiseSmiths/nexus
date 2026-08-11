@@ -135,6 +135,10 @@ router.post('/for-customer', auth, authorize([Role.PROVIDER]), DeviceController.
  *         name: addressId
  *         schema: { type: string, format: uuid }
  *         description: Filter devices by address
+ *       - in: query
+ *         name: deviceKey
+ *         schema: { type: string }
+ *         description: Filter devices by device type (e.g. the complaint's deviceKey)
  *     responses:
  *       200: { description: Devices fetched }
  */

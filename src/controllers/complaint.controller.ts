@@ -22,12 +22,15 @@ export class ComplaintController {
       const parsed = CreateComplaintSchema.safeParse(req.body);
       if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
 
-      const complaint = await ComplaintService.createComplaint({
+      const complaints = await ComplaintService.createComplaint({
         userId: req.user!.id,
         ...parsed.data,
       });
 
-      return ApiResponse.success(res, 201, 'Complaint created successfully', { complaint });
+      if (complaints.length === 1) {
+        return ApiResponse.success(res, 201, 'Complaint created successfully', { complaint: complaints[0] });
+      }
+      return ApiResponse.success(res, 201, 'Complaints created successfully', { complaints });
     } catch (error) {
       next(error);
     }

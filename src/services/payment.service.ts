@@ -466,7 +466,7 @@ export class PaymentService {
     notesParts.push(`Payment: UPI (₹${paymentOrder.amount / 100})`);
     notesParts.push(`Razorpay ID: ${razorpayPaymentId}`);
 
-    const complaint = await ComplaintService.createComplaint({
+    const [complaint] = await ComplaintService.createComplaint({
       userId:    paymentOrder.userId,
       title,
       notes:     notesParts.join('\n'),

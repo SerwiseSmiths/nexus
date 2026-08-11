@@ -121,26 +121,60 @@ function isFilterRelatedQuote(items: unknown): boolean {
 export class ComplaintService {
   // ─── Create ───────────────────────────────────────────────────────────────
 
+  // A request naming multiple devices raises one complaint per device — each
+  // gets its own provider assignment / stage lifecycle, and is tagged with
+  // that specific device's own type rather than one shared deviceKey.
   static async createComplaint({
     userId,
     title,
     notes,
     addressId,
     deviceId,
+    deviceIds,
     deviceKey,
-  }: CreateComplaintInput): Promise<ComplaintWithRelations> {
+  }: CreateComplaintInput): Promise<ComplaintWithRelations[]> {
     const address = await prisma.address.findFirst({
       where: { id: addressId, userId, isDeleted: false },
     });
     if (!address) throw new ApiError(404, 'Address not found');
 
-    if (deviceId) {
-      const device = await prisma.device.findFirst({
-        where: { id: deviceId, userId, isDeleted: false },
-      });
-      if (!device) throw new ApiError(404, 'Device not found');
+    const ids = deviceIds?.length ? deviceIds : [deviceId];
+
+    const complaints: ComplaintWithRelations[] = [];
+    for (const id of ids) {
+      let resolvedDeviceKey = deviceKey ?? null;
+
+      if (id) {
+        const device = await prisma.device.findFirst({
+          where: { id, userId, isDeleted: false },
+        });
+        if (!device) throw new ApiError(404, 'Device not found');
+        resolvedDeviceKey = device.deviceKey;
+      }
+
+      complaints.push(
+        await ComplaintService.createOne({ userId, title, notes, addressId, deviceId: id, deviceKey: resolvedDeviceKey }),
+      );
     }
 
+    return complaints;
+  }
+
+  private static async createOne({
+    userId,
+    title,
+    notes,
+    addressId,
+    deviceId,
+    deviceKey,
+  }: {
+    userId: string;
+    title: string;
+    notes?: string;
+    addressId: string;
+    deviceId?: string;
+    deviceKey: string | null;
+  }): Promise<ComplaintWithRelations> {
     const complaint = await prisma.complaint.create({
       data: {
         userId,
@@ -148,7 +182,7 @@ export class ComplaintService {
         notes:     notes ?? null,
         addressId,
         deviceId:  deviceId ?? null,
-        deviceKey: deviceKey ?? null,
+        deviceKey,
         stage:     ComplaintStage.ENTRANCE,
       },
       include: COMPLAINT_INCLUDE,
