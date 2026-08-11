@@ -5,6 +5,7 @@ import { ApiError } from '@/utils/apiResponse';
 import { logger } from '@/utils/logger';
 import { RealtimeService } from '@/services/realtime.service';
 import { NotificationService } from '@/services/notification.service';
+import { TelegramService } from '@/services/telegram.service';
 import type {
   CreateComplaintInput,
   UpdateStageInput,
@@ -167,6 +168,8 @@ export class ComplaintService {
     // Auto-assign the best available provider
     emit(() => ComplaintService.autoAssignProvider(complaint.id, []));
 
+    emit(() => TelegramService.notifyComplaintCreated(complaint));
+
     return complaint;
   }
 
@@ -305,6 +308,8 @@ export class ComplaintService {
       );
     }
 
+    emit(() => TelegramService.notifyComplaintUpdated(updated, { stage: `${oldStage} → ${stage}` }));
+
     return updated;
   }
 
@@ -345,6 +350,10 @@ export class ComplaintService {
         body:        `You have been assigned a new service complaint: "${complaint.title}"`,
         type:        NotificationType.COMPLAINT,
         complaintId,
+        // Data-only — lets the provider app show a full-screen incoming-job
+        // popup even when backgrounded/locked, instead of a plain tray notification.
+        dataOnly:    true,
+        metadata:    { event: 'complaint_assigned' },
       }),
     );
     emit(() =>
