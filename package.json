@@ -3,7 +3,7 @@
   "packageManager": "yarn@4.6.0",
   "resolutions": {
     "mime": "^3.0.0"
-  },  
+  },
   "scripts": {
     "dev": "ts-node-dev -r tsconfig-paths/register --respawn --transpile-only src/server.ts",
     "build": "tsc",
@@ -24,9 +24,9 @@
     "@": "dist"
   },
   "dependencies": {
-    "@hot-updater/core": "^0.35.9",
-    "@hot-updater/plugin-core": "^0.35.9",
-    "@hot-updater/server": "^0.35.9",
+    "@hot-updater/core": "0.35.9",
+    "@hot-updater/plugin-core": "0.35.9",
+    "@hot-updater/server": "0.35.9",
     "@prisma/client": "^6.18.0",
     "@supabase/supabase-js": "^2.105.4",
     "axios": "^1.15.0",

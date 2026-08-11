@@ -751,7 +751,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@hot-updater/core@npm:0.35.9, @hot-updater/core@npm:^0.35.9":
+"@hot-updater/core@npm:0.35.9":
   version: 0.35.9
   resolution: "@hot-updater/core@npm:0.35.9"
   checksum: 10c0/f9b4c700bb961137ab2fe7f854394147778c11c8eb71786ae4b9af83d6360487390d48fbe4fbff7ef552312efc0dc119a07593822f40af459373d5b19c042b1d
@@ -767,7 +767,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@hot-updater/plugin-core@npm:0.35.9, @hot-updater/plugin-core@npm:^0.35.9":
+"@hot-updater/plugin-core@npm:0.35.9":
   version: 0.35.9
   resolution: "@hot-updater/plugin-core@npm:0.35.9"
   dependencies:
@@ -780,7 +780,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@hot-updater/server@npm:^0.35.9":
+"@hot-updater/server@npm:0.35.9":
   version: 0.35.9
   resolution: "@hot-updater/server@npm:0.35.9"
   dependencies:
@@ -5992,9 +5992,9 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "nexus@workspace:."
   dependencies:
-    "@hot-updater/core": "npm:^0.35.9"
-    "@hot-updater/plugin-core": "npm:^0.35.9"
-    "@hot-updater/server": "npm:^0.35.9"
+    "@hot-updater/core": "npm:0.35.9"
+    "@hot-updater/plugin-core": "npm:0.35.9"
+    "@hot-updater/server": "npm:0.35.9"
     "@prisma/client": "npm:^6.18.0"
     "@supabase/supabase-js": "npm:^2.105.4"
     "@types/bcryptjs": "npm:^3.0.0"

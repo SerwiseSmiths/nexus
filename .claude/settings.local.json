@@ -7,7 +7,11 @@
       "Bash(DATABASE_URL=\"postgresql://postgres:root@localhost:5432/nexus?schema=public\" DIRECT_URL=\"postgresql://postgres:root@localhost:5432/nexus?schema=public\" npx prisma migrate dev --name add_address_model)",
       "Bash(npx tsc *)",
       "Bash(git -C \"d:/Serwise-bundle/nexus\" status)",
-      "Bash(git -C \"d:/Serwise-bundle/nexus\" branch)"
+      "Bash(git -C \"d:/Serwise-bundle/nexus\" branch)",
+      "Bash(yarn install *)",
+      "Bash(curl -s -m 3 http://localhost:3000/)",
+      "Bash(curl -s -m 3 -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/api)",
+      "Bash(curl -s -m 3 -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/api-docs)"
     ]
   }
 }
