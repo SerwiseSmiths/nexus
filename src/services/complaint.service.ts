@@ -50,7 +50,7 @@ const STAGE_TRANSITIONS: Record<ComplaintStage, ComplaintStage[]> = {
   [ComplaintStage.ENTRANCE]:    [ComplaintStage.QR_VALIDATED, ComplaintStage.REJECTED],
   [ComplaintStage.QR_VALIDATED]: [ComplaintStage.ESTIMATION, ComplaintStage.REJECTED],
   [ComplaintStage.ESTIMATION]:  [ComplaintStage.APPROVAL, ComplaintStage.REJECTED],
-  [ComplaintStage.APPROVAL]:    [ComplaintStage.PAYMENT, ComplaintStage.ESTIMATION],
+  [ComplaintStage.APPROVAL]:    [ComplaintStage.PAYMENT, ComplaintStage.REJECTED],
   [ComplaintStage.PAYMENT]:     [ComplaintStage.COMPLETED, ComplaintStage.REJECTED],
   [ComplaintStage.COMPLETED]:   [],
   [ComplaintStage.REJECTED]:    [],
@@ -533,11 +533,16 @@ export class ComplaintService {
 
       return updatedComplaint;
     } else {
-      // Rejected — send back to ESTIMATION for provider to revise
+      // Rejected — customer declined the quote, close the complaint
       const [updatedComplaint] = await prisma.$transaction([
         prisma.complaint.update({
           where: { id: complaintId },
-          data:  { stage: ComplaintStage.ESTIMATION },
+          data:  {
+            stage:           ComplaintStage.REJECTED,
+            rejectionReason: rejectionReason ?? null,
+            rejectedAt:      new Date(),
+            rejectedBy:      userId,
+          },
           include: COMPLAINT_INCLUDE,
         }),
         prisma.quote.update({
@@ -557,8 +562,8 @@ export class ComplaintService {
           userId:      complaint.providerId!,
           title:       'Quote Rejected',
           body:        rejectionReason
-            ? `Customer rejected the quote: "${rejectionReason}". Please revise.`
-            : 'Customer rejected the quote. Please revise and resubmit.',
+            ? `Customer rejected the quote: "${rejectionReason}". The complaint has been closed.`
+            : 'Customer rejected the quote. The complaint has been closed.',
           type:        NotificationType.COMPLAINT,
           complaintId,
         }),
