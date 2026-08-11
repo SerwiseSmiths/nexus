@@ -18,23 +18,25 @@ export type DeviceKey = (typeof DEVICE_KEYS)[keyof typeof DEVICE_KEYS];
 // ---------------------------------------------------------------------------
 // Master Purifier (RO) metadata schema
 // ---------------------------------------------------------------------------
+// Checkboxes the client never toggled are omitted from the payload entirely
+// (not sent as `false`), so every key defaults to false when absent.
 const BasicTechnologySchema = z.object({
-  spunFilter:       z.boolean(),
-  sedimentFilter:   z.boolean(),
-  preCarbonFilter:  z.boolean(),
-  postCarbonFilter: z.boolean(),
-  uv:               z.boolean(),
-  uf:               z.boolean(),
-  tdsController:    z.boolean(),
-  alkalineFilter:   z.boolean(),
+  spunFilter:       z.boolean().optional().default(false),
+  sedimentFilter:   z.boolean().optional().default(false),
+  preCarbonFilter:  z.boolean().optional().default(false),
+  postCarbonFilter: z.boolean().optional().default(false),
+  uv:               z.boolean().optional().default(false),
+  uf:               z.boolean().optional().default(false),
+  tdsController:    z.boolean().optional().default(false),
+  alkalineFilter:   z.boolean().optional().default(false),
 });
 
 const AdditionalTechnologySchema = z.object({
-  copper:    z.boolean(),
-  magnesium: z.boolean(),
-  zinc:      z.boolean(),
-  selenium:  z.boolean(),
-  other:     z.boolean(),
+  copper:    z.boolean().optional().default(false),
+  magnesium: z.boolean().optional().default(false),
+  zinc:      z.boolean().optional().default(false),
+  selenium:  z.boolean().optional().default(false),
+  other:     z.boolean().optional().default(false),
 });
 
 export const MasterPurifierMetaSchema = z.object({
