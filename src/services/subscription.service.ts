@@ -1,6 +1,7 @@
 import { BillingCycle, SubscriptionStatus } from '@prisma/client';
 import prisma from '@/services/prisma.service';
 import { StrapiService } from '@/services/strapi.service';
+import { TelegramService } from '@/services/telegram.service';
 import { ApiError } from '@/utils/apiResponse';
 import { logger } from '@/utils/logger';
 import type { PurchaseSubscriptionInput, AddonSnapshot } from '@/types/subscription.types';
@@ -86,6 +87,7 @@ export class SubscriptionService {
     });
 
     logger.info('Subscription purchased', { subscriptionId: subscription.id, userId, deviceTypeKey, planKey });
+    TelegramService.notifySubscriptionCreated(subscription).catch(() => {});
     return subscription;
   }
 

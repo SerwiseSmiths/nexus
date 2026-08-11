@@ -1,6 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
 import { getSupabaseConfig } from '@/configs/supabase.config';
-import { logger } from '@/utils/logger';
 import { sleep } from '@/utils/sleep';
 
 // ---------------------------------------------------------------------------
@@ -27,7 +26,7 @@ export class RealtimeService {
   ): Promise<void> {
     const { url, serviceRoleKey } = getSupabaseConfig();
 
-    logger.info(`[Realtime] connecting to broadcast on channel=${channelName} event=${event}`, { supabaseUrl: url });
+    console.log(`[Realtime] connecting to broadcast on channel=${channelName} event=${event}`, { supabaseUrl: url });
 
     const supabase = createClient(url, serviceRoleKey, {
       auth: { persistSession: false, autoRefreshToken: false },
@@ -36,7 +35,7 @@ export class RealtimeService {
     const channel = supabase.channel(channelName);
 
     const disconnect = (reason: string) => {
-      logger.info(`[Realtime] disconnect — channel=${channelName} reason=${reason}`);
+      console.log(`[Realtime][disconnected] channel=${channelName} reason=${reason}`);
       supabase.removeChannel(channel);
     };
 
@@ -47,23 +46,24 @@ export class RealtimeService {
       }, 10_000);
 
       channel.subscribe((status: string, err?: Error) => {
-        logger.info(`[Realtime] channel status`, { channel: channelName, status });
+        console.log(`[Realtime] channel status`, { channel: channelName, status });
 
         if (err) {
           clearTimeout(timeout);
-          logger.error(`[Realtime] channel error — channel=${channelName}`, { error: err.message });
+          console.error(`[Realtime] channel error — channel=${channelName}`, { error: err.message });
           disconnect('error');
           reject(err);
           return;
         }
 
         if (status === 'SUBSCRIBED') {
-          logger.info(`[Realtime] connected — channel=${channelName}`);
+          console.log(`[Realtime][connected] channel=${channelName}`);
+          console.log(`[Realtime][event:emitted] channel=${channelName} event=${event}`, { payload });
           channel
             .send({ type: 'broadcast', event, payload })
             .then((sendStatus) => {
               clearTimeout(timeout);
-              logger.info(`[Realtime] broadcast send status`, { channel: channelName, event, sendStatus });
+              console.log(`[Realtime] broadcast send status`, { channel: channelName, event, sendStatus });
               disconnect('sent');
               resolve();
             })
@@ -73,7 +73,7 @@ export class RealtimeService {
               reject(sendErr);
             });
         } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          logger.warn(`[Realtime] disconnected — channel=${channelName} status=${status}`);
+          console.warn(`[Realtime][disconnected] channel=${channelName} status=${status}`);
         }
       });
     });
@@ -88,9 +88,9 @@ export class RealtimeService {
   ): Promise<void> {
     try {
       await this.broadcast(`user:${userId}`, event, payload);
-      logger.info(`[Realtime] ✓ ${event} delivered — userId=${userId}`);
+      console.log(`[Realtime] ✓ ${event} delivered — userId=${userId}`);
     } catch (err: any) {
-      logger.error(`[Realtime] ✗ ${event} FAILED — userId=${userId}`, {
+      console.error(`[Realtime] ✗ ${event} FAILED — userId=${userId}`, {
         status:  err?.response?.status,
         data:    err?.response?.data ?? err?.responseData,
         message: err?.message,
@@ -105,9 +105,9 @@ export class RealtimeService {
   ): Promise<void> {
     try {
       await this.broadcast(`provider:${providerId}`, event, payload);
-      logger.info(`[Realtime] ✓ ${event} delivered — providerId=${providerId}`);
+      console.log(`[Realtime] ✓ ${event} delivered — providerId=${providerId}`);
     } catch (err: any) {
-      logger.error(`[Realtime] ✗ ${event} FAILED — providerId=${providerId}`, {
+      console.error(`[Realtime] ✗ ${event} FAILED — providerId=${providerId}`, {
         status:  err?.response?.status,
         data:    err?.response?.data ?? err?.responseData,
         message: err?.message,
@@ -201,15 +201,15 @@ export class RealtimeService {
   ): Promise<void> {
     // Wait 10 s before broadcasting — gives the client time to navigate to
     // PaymentVerificationScreen and join the Supabase channel.
-    logger.info(`[Realtime] payment:verified queued — userId=${userId}`);
+    console.log(`[Realtime] payment:verified queued — userId=${userId}`);
     await sleep(7_000);
 
-    logger.info(`[Realtime] broadcasting payment:verified — channel=user:${userId}`, { payload });
+    console.log(`[Realtime] broadcasting payment:verified — channel=user:${userId}`, { payload });
     try {
       await this.broadcast(`user:${userId}`, 'payment:verified', payload);
-      logger.info(`[Realtime] ✓ payment:verified delivered — userId=${userId}`);
+      console.log(`[Realtime] ✓ payment:verified delivered — userId=${userId}`);
     } catch (err: any) {
-      logger.error(`[Realtime] ✗ payment:verified FAILED — userId=${userId}`, {
+      console.error(`[Realtime] ✗ payment:verified FAILED — userId=${userId}`, {
         status:  err?.response?.status,
         data:    err?.response?.data ?? err?.responseData,
         message: err?.message,

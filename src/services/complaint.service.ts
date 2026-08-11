@@ -5,6 +5,7 @@ import { ApiError } from '@/utils/apiResponse';
 import { logger } from '@/utils/logger';
 import { RealtimeService } from '@/services/realtime.service';
 import { NotificationService } from '@/services/notification.service';
+import { TelegramService } from '@/services/telegram.service';
 import type {
   CreateComplaintInput,
   UpdateStageInput,
@@ -167,6 +168,8 @@ export class ComplaintService {
     // Auto-assign the best available provider
     emit(() => ComplaintService.autoAssignProvider(complaint.id, []));
 
+    emit(() => TelegramService.notifyComplaintCreated(complaint));
+
     return complaint;
   }
 
@@ -304,6 +307,8 @@ export class ComplaintService {
         }),
       );
     }
+
+    emit(() => TelegramService.notifyComplaintUpdated(updated, { stage: `${oldStage} → ${stage}` }));
 
     return updated;
   }

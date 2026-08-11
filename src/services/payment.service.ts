@@ -10,6 +10,7 @@ import { WalletService } from '@/services/wallet.service';
 import { RealtimeService } from '@/services/realtime.service';
 import { ComplaintService } from '@/services/complaint.service';
 import { NotificationService } from '@/services/notification.service';
+import { TelegramService } from '@/services/telegram.service';
 import type {
   CreateRazorpayOrderInput,
   CreatePaymentLinkInput,
@@ -391,6 +392,13 @@ export class PaymentService {
         body:     'Your service plan is now active.',
         type:     NotificationType.PAYMENT,
         metadata: { navigate: 'wallet' },
+      }),
+      TelegramService.notifyPaymentVerified({
+        userId:            paymentOrder.userId,
+        subscriptionId:    subscription.id,
+        amountRupees:      paymentOrder.amount / 100,
+        razorpayPaymentId,
+        ledgerId:          ledger.id,
       }),
     ]);
   }

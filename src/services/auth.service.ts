@@ -10,6 +10,7 @@ import { ApiError } from "../utils/apiResponse";
 import { generateUniqueReferralCode } from "../utils/referralCode";
 import { StrapiService } from '@/services/strapi.service';
 import { WalletService } from '@/services/wallet.service';
+import { TelegramService } from '@/services/telegram.service';
 
 const OTP_TTL_MINUTES = 10;
 const OTP_MAX_ATTEMPTS = 5;
@@ -107,6 +108,7 @@ export class AuthService {
         await tx.wallet.create({ data: { userId: created.id } });
         return created;
       });
+      TelegramService.notifyNewUser(user).catch(() => {});
     } else if (!user.referralCode) {
       const referralCode = await generateUniqueReferralCode();
       await prisma.user.update({ where: { id: user.id }, data: { referralCode } });
