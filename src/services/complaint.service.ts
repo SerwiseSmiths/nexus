@@ -100,7 +100,7 @@ function generateQrExpiry(): Date {
 }
 
 function emit(fn: () => Promise<unknown>): void {
-  fn().catch(() => {});
+  fn().catch((err) => logger.error('[Complaint] Background task failed:', err));
 }
 
 // A quote is treated as a filter change if any line item name mentions "filter" —
@@ -232,12 +232,19 @@ export class ComplaintService {
       },
     });
 
-    if (providers.length === 0) return;
+    if (providers.length === 0) {
+      logger.warn('[Complaint] No eligible providers found for auto-assign', { complaintId, excludeIds });
+      return;
+    }
 
     // Pick provider with fewest active complaints (basic load balancing)
     const best = providers.reduce((a, b) =>
       a._count.complaintsAsProvider <= b._count.complaintsAsProvider ? a : b,
     );
+
+    logger.info('[Complaint] Auto-assigning provider', {
+      complaintId, providerId: best.id, candidateCount: providers.length,
+    });
 
     await ComplaintService.assignProvider({ complaintId, providerId: best.id });
   }
