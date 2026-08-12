@@ -10,6 +10,7 @@ export const CreateComplaintSchema = z.object({
   notes:     z.string().optional(),
   addressId: z.string().uuid('Invalid address ID'),
   deviceId:  z.string().uuid('Invalid device ID').optional(),
+  deviceIds: z.array(z.string().uuid('Invalid device ID')).min(1).optional(),
   deviceKey: z.string().optional(),
 });
 

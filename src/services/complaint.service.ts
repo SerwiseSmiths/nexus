@@ -50,7 +50,7 @@ const STAGE_TRANSITIONS: Record<ComplaintStage, ComplaintStage[]> = {
   [ComplaintStage.ENTRANCE]:    [ComplaintStage.QR_VALIDATED, ComplaintStage.REJECTED],
   [ComplaintStage.QR_VALIDATED]: [ComplaintStage.ESTIMATION, ComplaintStage.REJECTED],
   [ComplaintStage.ESTIMATION]:  [ComplaintStage.APPROVAL, ComplaintStage.REJECTED],
-  [ComplaintStage.APPROVAL]:    [ComplaintStage.PAYMENT, ComplaintStage.ESTIMATION],
+  [ComplaintStage.APPROVAL]:    [ComplaintStage.PAYMENT, ComplaintStage.REJECTED],
   [ComplaintStage.PAYMENT]:     [ComplaintStage.COMPLETED, ComplaintStage.REJECTED],
   [ComplaintStage.COMPLETED]:   [],
   [ComplaintStage.REJECTED]:    [],
@@ -100,7 +100,7 @@ function generateQrExpiry(): Date {
 }
 
 function emit(fn: () => Promise<unknown>): void {
-  fn().catch(() => {});
+  fn().catch((err) => logger.error('[Complaint] Background task failed:', err));
 }
 
 // A quote is treated as a filter change if any line item name mentions "filter" —
@@ -121,26 +121,60 @@ function isFilterRelatedQuote(items: unknown): boolean {
 export class ComplaintService {
   // ─── Create ───────────────────────────────────────────────────────────────
 
+  // A request naming multiple devices raises one complaint per device — each
+  // gets its own provider assignment / stage lifecycle, and is tagged with
+  // that specific device's own type rather than one shared deviceKey.
   static async createComplaint({
     userId,
     title,
     notes,
     addressId,
     deviceId,
+    deviceIds,
     deviceKey,
-  }: CreateComplaintInput): Promise<ComplaintWithRelations> {
+  }: CreateComplaintInput): Promise<ComplaintWithRelations[]> {
     const address = await prisma.address.findFirst({
       where: { id: addressId, userId, isDeleted: false },
     });
     if (!address) throw new ApiError(404, 'Address not found');
 
-    if (deviceId) {
-      const device = await prisma.device.findFirst({
-        where: { id: deviceId, userId, isDeleted: false },
-      });
-      if (!device) throw new ApiError(404, 'Device not found');
+    const ids = deviceIds?.length ? deviceIds : [deviceId];
+
+    const complaints: ComplaintWithRelations[] = [];
+    for (const id of ids) {
+      let resolvedDeviceKey = deviceKey ?? null;
+
+      if (id) {
+        const device = await prisma.device.findFirst({
+          where: { id, userId, isDeleted: false },
+        });
+        if (!device) throw new ApiError(404, 'Device not found');
+        resolvedDeviceKey = device.deviceKey;
+      }
+
+      complaints.push(
+        await ComplaintService.createOne({ userId, title, notes, addressId, deviceId: id, deviceKey: resolvedDeviceKey }),
+      );
     }
 
+    return complaints;
+  }
+
+  private static async createOne({
+    userId,
+    title,
+    notes,
+    addressId,
+    deviceId,
+    deviceKey,
+  }: {
+    userId: string;
+    title: string;
+    notes?: string;
+    addressId: string;
+    deviceId?: string;
+    deviceKey: string | null;
+  }): Promise<ComplaintWithRelations> {
     const complaint = await prisma.complaint.create({
       data: {
         userId,
@@ -148,7 +182,7 @@ export class ComplaintService {
         notes:     notes ?? null,
         addressId,
         deviceId:  deviceId ?? null,
-        deviceKey: deviceKey ?? null,
+        deviceKey,
         stage:     ComplaintStage.ENTRANCE,
       },
       include: COMPLAINT_INCLUDE,
@@ -198,12 +232,19 @@ export class ComplaintService {
       },
     });
 
-    if (providers.length === 0) return;
+    if (providers.length === 0) {
+      logger.warn('[Complaint] No eligible providers found for auto-assign', { complaintId, excludeIds });
+      return;
+    }
 
     // Pick provider with fewest active complaints (basic load balancing)
     const best = providers.reduce((a, b) =>
       a._count.complaintsAsProvider <= b._count.complaintsAsProvider ? a : b,
     );
+
+    logger.info('[Complaint] Auto-assigning provider', {
+      complaintId, providerId: best.id, candidateCount: providers.length,
+    });
 
     await ComplaintService.assignProvider({ complaintId, providerId: best.id });
   }
@@ -533,11 +574,16 @@ export class ComplaintService {
 
       return updatedComplaint;
     } else {
-      // Rejected — send back to ESTIMATION for provider to revise
+      // Rejected — customer declined the quote, close the complaint
       const [updatedComplaint] = await prisma.$transaction([
         prisma.complaint.update({
           where: { id: complaintId },
-          data:  { stage: ComplaintStage.ESTIMATION },
+          data:  {
+            stage:           ComplaintStage.REJECTED,
+            rejectionReason: rejectionReason ?? null,
+            rejectedAt:      new Date(),
+            rejectedBy:      userId,
+          },
           include: COMPLAINT_INCLUDE,
         }),
         prisma.quote.update({
@@ -557,8 +603,8 @@ export class ComplaintService {
           userId:      complaint.providerId!,
           title:       'Quote Rejected',
           body:        rejectionReason
-            ? `Customer rejected the quote: "${rejectionReason}". Please revise.`
-            : 'Customer rejected the quote. Please revise and resubmit.',
+            ? `Customer rejected the quote: "${rejectionReason}". The complaint has been closed.`
+            : 'Customer rejected the quote. The complaint has been closed.',
           type:        NotificationType.COMPLAINT,
           complaintId,
         }),

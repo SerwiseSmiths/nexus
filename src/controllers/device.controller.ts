@@ -107,7 +107,8 @@ export class DeviceController {
     try {
       const targetUserId = req.params.userId as string;
       const addressId    = req.query.addressId as string | undefined;
-      const devices = await DeviceService.getDevicesByUserId({ targetUserId, addressId });
+      const deviceKey    = req.query.deviceKey as string | undefined;
+      const devices = await DeviceService.getDevicesByUserId({ targetUserId, addressId, deviceKey });
       return ApiResponse.success(res, 200, 'Customer devices fetched successfully', { devices });
     } catch (error) {
       next(error);
