@@ -11,7 +11,14 @@
       "Bash(yarn install *)",
       "Bash(curl -s -m 3 http://localhost:3000/)",
       "Bash(curl -s -m 3 -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/api)",
-      "Bash(curl -s -m 3 -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/api-docs)"
+      "Bash(curl -s -m 3 -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/api-docs)",
+      "Bash(vercel --version)",
+      "Bash(vercel whoami *)",
+      "Bash(vercel project *)",
+      "Bash(vercel ls *)",
+      "Bash(vercel inspect *)",
+      "Bash(vercel logs *)",
+      "Bash(vercel alias *)"
     ]
   }
 }

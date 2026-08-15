@@ -1,7 +1,4 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import multer from 'multer';
-import os from 'os';
-import fs from 'fs/promises';
 import { toNodeHandler } from '@hot-updater/server/node';
 import { otaDeployAuthFor, OtaApp } from '@/middlewares/otaDeployAuth.middleware';
 import {
@@ -10,10 +7,10 @@ import {
   otaAdminHandlerSerwise,
   otaStoragePlugin,
 } from '@/services/otaServer.service';
+import { createUploadSignature } from '@/services/otaCloudinaryStorage.service';
 import { logger } from '@/utils/logger';
 
 const router = Router();
-const upload = multer({ dest: os.tmpdir() });
 
 // ─── Admin API (gated, per app) ────────────────────────────────────────────────
 // Registered BEFORE the public catch-all below — Express matches routes in
@@ -29,23 +26,18 @@ const buildAppAdminRouter = (app: OtaApp, adminHandler: typeof otaAdminHandlerRa
   const adminRouter = Router();
   adminRouter.use(otaDeployAuthFor(app));
 
-  adminRouter.post('/storage/upload', upload.single('file'), async (req: Request, res: Response) => {
-    const key = req.body?.key;
-    const file = req.file;
-
-    if (!key || !file) {
-      return res.status(400).json({ message: 'Missing required "key" field or "file" upload' });
+  // Direct-to-Cloudinary upload, step 1: hand the CLI a short-lived signed
+  // payload (tiny JSON, well under Vercel's 4.5MB body cap) instead of
+  // proxying the bundle bytes through this function. The CLI uses this to
+  // PUT the actual file straight to Cloudinary — see
+  // <app>/hot-updater.config.ts's custom `storage.upload`.
+  adminRouter.post('/storage/upload-signature', (req: Request, res: Response) => {
+    const { key, filename } = req.body ?? {};
+    if (!key || !filename) {
+      return res.status(400).json({ message: 'Missing required "key" or "filename" field' });
     }
 
-    try {
-      const { storageUri } = await otaStoragePlugin.profiles.node!.upload(key, file.path);
-      return res.status(200).json({ storageUri });
-    } catch (error) {
-      logger.error('[ota] storage upload failed', error);
-      return res.status(500).json({ message: 'Failed to upload OTA bundle' });
-    } finally {
-      await fs.unlink(file.path).catch(() => undefined);
-    }
+    return res.status(200).json(createUploadSignature(key, filename));
   });
 
   adminRouter.delete('/storage/delete', async (req: Request, res: Response) => {

@@ -322,7 +322,7 @@ router.patch(
 router.patch(
   '/:id/device',
   auth,
-  authorize([Role.CUSTOMER, Role.PROVIDER]),
+  authorize([Role.CUSTOMER, Role.PROVIDER, Role.ADMIN]),
   ComplaintController.linkDevice,
 );
 

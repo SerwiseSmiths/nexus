@@ -73,4 +73,14 @@ export class UserController {
       next(error);
     }
   }
+
+  static async listProviders(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const search = req.query.search as string | undefined;
+      const providers = await UserService.listProviders(search);
+      return ApiResponse.success(res, 200, 'Providers fetched successfully', { providers });
+    } catch (error) {
+      next(error);
+    }
+  }
 }

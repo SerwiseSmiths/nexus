@@ -115,7 +115,7 @@ router.post('/', auth, DeviceController.addDevice);
  *       201: { description: Device added for customer }
  *       400: { description: Validation error }
  */
-router.post('/for-customer', auth, authorize([Role.PROVIDER]), DeviceController.addForCustomer);
+router.post('/for-customer', auth, authorize([Role.PROVIDER, Role.ADMIN]), DeviceController.addForCustomer);
 
 /**
  * @swagger
@@ -142,7 +142,7 @@ router.post('/for-customer', auth, authorize([Role.PROVIDER]), DeviceController.
  *     responses:
  *       200: { description: Devices fetched }
  */
-router.get('/customer/:userId', auth, authorize([Role.PROVIDER]), DeviceController.listForCustomer);
+router.get('/customer/:userId', auth, authorize([Role.PROVIDER, Role.ADMIN]), DeviceController.listForCustomer);
 
 /**
  * @swagger

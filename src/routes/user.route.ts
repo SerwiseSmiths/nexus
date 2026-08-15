@@ -1,6 +1,8 @@
 import { Router } from 'express';
+import { Role } from '@prisma/client';
 import { UserController } from '@/controllers/user.controller';
 import { auth } from '@/middlewares/auth.middleware';
+import { authorize } from '@/middlewares/authorize.middleware';
 
 const router = Router();
 
@@ -93,5 +95,24 @@ router.get('/profile', auth, UserController.getProfile);
  *         description: Email updated successfully
  */
 router.patch('/email', auth, UserController.updateEmail);
+
+/**
+ * @swagger
+ * /user/providers:
+ *   get:
+ *     summary: List active providers (ADMIN)
+ *     description: Used to populate a provider picker, e.g. when reassigning a complaint.
+ *     tags: [User]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: search
+ *         schema: { type: string }
+ *         description: Filter by name or phone number
+ *     responses:
+ *       200: { description: Providers fetched }
+ */
+router.get('/providers', auth, authorize([Role.ADMIN]), UserController.listProviders);
 
 export default router;
