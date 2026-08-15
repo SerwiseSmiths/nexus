@@ -27,6 +27,38 @@ const publicIdFor = (key: string) => `${BUCKET}/${key}`;
 const publicIdForUpload = (key: string, filePath: string) =>
   publicIdFor(`${key}/${path.basename(filePath)}`);
 
+// Signed direct-to-Cloudinary upload — bypasses nexus's own request body
+// entirely for the file bytes. Needed because nexus runs as a Vercel
+// serverless function (hard 4.5MB request body cap, not configurable) and
+// serwise's Hermes bundles exceed that; the old path proxied the whole file
+// through nexus's `/storage/upload` route via multer, which 413'd. The CLI
+// now calls `/storage/upload-signature` (tiny JSON, well under the cap) to
+// get a signed payload, then PUTs the actual bundle bytes straight to
+// Cloudinary's REST API — see <app>/hot-updater.config.ts.
+export const createUploadSignature = (key: string, filename: string) => {
+  const publicId = publicIdFor(`${key}/${filename}`);
+  const timestamp = Math.floor(Date.now() / 1000);
+  const paramsToSign = {
+    overwrite: true,
+    public_id: publicId,
+    timestamp,
+    type: DELIVERY_TYPE,
+  };
+  const signature = cloudinary.utils.api_sign_request(paramsToSign, cloudinary.config().api_secret!);
+
+  return {
+    cloudName: cloudinary.config().cloud_name!,
+    apiKey: cloudinary.config().api_key!,
+    resourceType: RESOURCE_TYPE,
+    publicId,
+    timestamp,
+    signature,
+    overwrite: true,
+    type: DELIVERY_TYPE,
+    storageUri: `cloudinary://${publicId}`,
+  };
+};
+
 const parseCloudinaryUri = (storageUri: string) => {
   const withoutProtocol = storageUri.replace(/^cloudinary:\/\//, '');
   if (withoutProtocol === storageUri) {

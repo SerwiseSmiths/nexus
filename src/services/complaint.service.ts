@@ -24,10 +24,10 @@ import type {
 
 const COMPLAINT_INCLUDE = {
   user: {
-    select: { id: true, firstName: true, lastName: true, phoneNo: true, avatar: true },
+    select: { id: true, firstName: true, lastName: true, phoneNo: true, email: true, avatar: true },
   },
   provider: {
-    select: { id: true, firstName: true, lastName: true, phoneNo: true, avatar: true },
+    select: { id: true, firstName: true, lastName: true, phoneNo: true, email: true, avatar: true },
   },
   address: true,
   device: {
@@ -626,7 +626,7 @@ export class ComplaintService {
       if (complaint.providerId !== requesterId) {
         throw new ApiError(403, 'This complaint is not assigned to you');
       }
-    } else {
+    } else if (requesterRole !== Role.ADMIN) {
       if (complaint.userId !== requesterId) {
         throw new ApiError(403, 'Forbidden');
       }

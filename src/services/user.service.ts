@@ -1,3 +1,4 @@
+import { Role } from '@prisma/client';
 import prisma from '@/services/prisma.service';
 import { UploadService } from '@/services/upload.service';
 import { ApiError } from '@/utils/apiResponse';
@@ -109,5 +110,24 @@ export class UserService {
     }
 
     return user;
+  }
+
+  static async listProviders(search?: string) {
+    return prisma.user.findMany({
+      where: {
+        role: Role.PROVIDER,
+        isDeleted: false,
+        isActive: true,
+        ...(search && {
+          OR: [
+            { firstName: { contains: search, mode: 'insensitive' } },
+            { lastName: { contains: search, mode: 'insensitive' } },
+            { phoneNo: { contains: search, mode: 'insensitive' } },
+          ],
+        }),
+      },
+      select: { id: true, firstName: true, lastName: true, phoneNo: true, email: true, avatar: true },
+      orderBy: { firstName: 'asc' },
+    });
   }
 }
