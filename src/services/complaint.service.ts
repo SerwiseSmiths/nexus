@@ -210,13 +210,27 @@ export class ComplaintService {
   // ─── Auto-assign ──────────────────────────────────────────────────────────
 
   static async autoAssignProvider(complaintId: string, excludeIds: string[]): Promise<void> {
-    // Find providers with fewest active (non-closed) complaints, excluding already-rejected ones
+    const complaint = await prisma.complaint.findFirst({
+      where:   { id: complaintId, isDeleted: false },
+      include: { device: { select: { type: true } } },
+    });
+    if (!complaint) {
+      logger.warn('[Complaint] autoAssignProvider called for missing complaint', { complaintId });
+      return;
+    }
+
+    // Only providers whose skills include the complaint's device type are eligible.
+    // If the complaint has no linked device yet, its device type is unknown, so
+    // fall back to matching any active provider rather than blocking assignment.
+    const deviceType = complaint.device?.type ?? null;
+
     const providers = await prisma.user.findMany({
       where: {
         role:      Role.PROVIDER,
         isActive:  true,
         isDeleted: false,
         id: excludeIds.length > 0 ? { notIn: excludeIds } : undefined,
+        ...(deviceType && { skills: { has: deviceType } }),
       },
       include: {
         _count: {
@@ -233,7 +247,12 @@ export class ComplaintService {
     });
 
     if (providers.length === 0) {
-      logger.warn('[Complaint] No eligible providers found for auto-assign', { complaintId, excludeIds });
+      logger.warn('[Complaint] No skill-matching providers found for auto-assign', {
+        complaintId, deviceType, excludeIds,
+      });
+      // Leave the complaint unassigned rather than assigning a provider without
+      // the matching skill — flag admins so they can assign one manually.
+      emit(() => TelegramService.notifyNoProviderMatch(complaint, deviceType));
       return;
     }
 
@@ -243,7 +262,7 @@ export class ComplaintService {
     );
 
     logger.info('[Complaint] Auto-assigning provider', {
-      complaintId, providerId: best.id, candidateCount: providers.length,
+      complaintId, providerId: best.id, deviceType, candidateCount: providers.length,
     });
 
     await ComplaintService.assignProvider({ complaintId, providerId: best.id });

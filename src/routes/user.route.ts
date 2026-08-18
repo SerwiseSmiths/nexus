@@ -110,9 +110,47 @@ router.patch('/email', auth, UserController.updateEmail);
  *         name: search
  *         schema: { type: string }
  *         description: Filter by name or phone number
+ *       - in: query
+ *         name: deviceType
+ *         schema:
+ *           type: string
+ *           enum: [MASTER_PURIFIER, AIR_CONDITIONER, FRIDGE, WASHING_MACHINE, GEYSER]
+ *         description: Only return providers whose skills include this device type
  *     responses:
  *       200: { description: Providers fetched }
  */
 router.get('/providers', auth, authorize([Role.ADMIN]), UserController.listProviders);
+
+/**
+ * @swagger
+ * /user/{id}/skills:
+ *   patch:
+ *     summary: Set a provider's skills (ADMIN)
+ *     description: Used by Watchtower to configure which device types a provider can be auto-assigned complaints for.
+ *     tags: [User]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [skills]
+ *             properties:
+ *               skills:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   enum: [MASTER_PURIFIER, AIR_CONDITIONER, FRIDGE, WASHING_MACHINE, GEYSER]
+ *     responses:
+ *       200: { description: Provider skills updated successfully }
+ */
+router.patch('/:id/skills', auth, authorize([Role.ADMIN]), UserController.updateProviderSkills);
 
 export default router;

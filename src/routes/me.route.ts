@@ -90,6 +90,34 @@ router.patch('/profile', auth, UserController.updateProfile);
 
 /**
  * @swagger
+ * /me/skills:
+ *   patch:
+ *     summary: Set the device types this provider is skilled to service
+ *     description: Providers only see complaints auto-assigned for device types listed in their skills.
+ *     tags: [Me]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [skills]
+ *             properties:
+ *               skills:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   enum: [MASTER_PURIFIER, AIR_CONDITIONER, FRIDGE, WASHING_MACHINE, GEYSER]
+ *     responses:
+ *       200:
+ *         description: Skills updated successfully
+ */
+router.patch('/skills', auth, authorize([Role.PROVIDER]), UserController.updateSkills);
+
+/**
+ * @swagger
  * /me/email:
  *   patch:
  *     summary: Update own email

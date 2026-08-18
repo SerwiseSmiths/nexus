@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Complaint, Subscription, User } from '@prisma/client';
+import type { Complaint, DeviceType, Subscription, User } from '@prisma/client';
 import prisma from '@/services/prisma.service';
 import { ConfigLoader } from '@/configs/configLoader';
 import { logger } from '@/utils/logger';
@@ -134,6 +134,20 @@ export class TelegramService {
       line('📝', 'Notes', complaint.notes) +
       line('📅', 'Created', fmt(complaint.createdAt)) +
       jsonBlock(complaint);
+
+    await TelegramService.send(html);
+  }
+
+  static async notifyNoProviderMatch(complaint: ComplaintLike, deviceType: DeviceType | null): Promise<void> {
+    const html =
+      `⚠️ <b>No Skill-Matching Provider Found</b>\n` +
+      `${'─'.repeat(28)}\n` +
+      line('🆔', 'Complaint ID', complaint.id) +
+      line('📌', 'Title', complaint.title) +
+      userLines(complaint.user, complaint.userId) +
+      line('📟', 'Device Type', deviceType ?? complaint.deviceKey) +
+      line('📅', 'Created', fmt(complaint.createdAt)) +
+      `\nNo active provider has this device type in their skills. Please assign a provider manually.\n`;
 
     await TelegramService.send(html);
   }
