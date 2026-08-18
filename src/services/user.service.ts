@@ -1,9 +1,9 @@
-import { Role } from '@prisma/client';
+import { DeviceType, Role } from '@prisma/client';
 import prisma from '@/services/prisma.service';
 import { UploadService } from '@/services/upload.service';
 import { ApiError } from '@/utils/apiResponse';
 import { generateUniqueReferralCode } from '@/utils/referralCode';
-import type { UpdateProfileInput, UploadAvatarInput, UpdateEmailInput } from '@/types/user.types';
+import type { UpdateProfileInput, UploadAvatarInput, UpdateEmailInput, UpdateSkillsInput } from '@/types/user.types';
 
 // Fields included in every public profile response
 const PROFILE_SELECT = {
@@ -16,6 +16,7 @@ const PROFILE_SELECT = {
   role:         true,
   isActive:     true,
   referralCode: true,
+  skills:       true,
   createdAt:    true,
   updatedAt:    true,
 } as const;
@@ -112,12 +113,13 @@ export class UserService {
     return user;
   }
 
-  static async listProviders(search?: string) {
+  static async listProviders(search?: string, deviceType?: DeviceType) {
     return prisma.user.findMany({
       where: {
         role: Role.PROVIDER,
         isDeleted: false,
         isActive: true,
+        ...(deviceType && { skills: { has: deviceType } }),
         ...(search && {
           OR: [
             { firstName: { contains: search, mode: 'insensitive' } },
@@ -126,8 +128,28 @@ export class UserService {
           ],
         }),
       },
-      select: { id: true, firstName: true, lastName: true, phoneNo: true, email: true, avatar: true },
+      select: { id: true, firstName: true, lastName: true, phoneNo: true, email: true, avatar: true, skills: true },
       orderBy: { firstName: 'asc' },
+    });
+  }
+
+  // Providers self-edit their own skills; admins may edit any provider's skills
+  // via the same method (see UserController.updateSkills / updateProviderSkills).
+  static async updateSkills({ userId, skills }: UpdateSkillsInput) {
+    const unique = Array.from(new Set(skills));
+    const invalid = unique.filter(s => !Object.values(DeviceType).includes(s));
+    if (invalid.length > 0) {
+      throw new ApiError(400, `Invalid device type(s): ${invalid.join(', ')}`);
+    }
+
+    const user = await prisma.user.findFirst({ where: { id: userId, isDeleted: false } });
+    if (!user) throw new ApiError(404, 'User not found');
+    if (user.role !== Role.PROVIDER) throw new ApiError(400, 'Only providers can have skills');
+
+    return prisma.user.update({
+      where: { id: userId },
+      data: { skills: unique },
+      select: PROFILE_SELECT,
     });
   }
 }

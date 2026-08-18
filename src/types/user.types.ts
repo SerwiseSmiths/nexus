@@ -1,6 +1,16 @@
+import { DeviceType } from '@prisma/client';
+
 export interface UploadAvatarBody {
   base64: string;
   mimeType: string;
+}
+
+export interface UpdateSkillsBody {
+  skills: DeviceType[];
+}
+
+export interface UpdateSkillsInput extends UpdateSkillsBody {
+  userId: string;
 }
 
 export interface UpdateProfileBody {

@@ -134,6 +134,8 @@ model User {
   referralCode  String?        @unique
   isActive      Boolean        @default(true)
   isDeleted     Boolean        @default(false)
+  // Device types this provider is skilled to service — only meaningful for role: PROVIDER
+  skills        DeviceType[]   @default([])
   refreshTokens RefreshToken[]
   addresses     Address[]
   devices       Device[]

@@ -1,8 +1,9 @@
 import { Response, NextFunction } from 'express';
+import { DeviceType } from '@prisma/client';
 import { AuthRequest } from '@/middlewares/auth.middleware';
 import { UserService } from '@/services/user.service';
 import { ApiResponse } from '@/utils/apiResponse';
-import type { UploadAvatarBody, UpdateProfileBody } from '@/types/user.types';
+import type { UploadAvatarBody, UpdateProfileBody, UpdateSkillsBody } from '@/types/user.types';
 
 interface UpdateEmailBody { email: string; }
 
@@ -77,8 +78,37 @@ export class UserController {
   static async listProviders(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const search = req.query.search as string | undefined;
-      const providers = await UserService.listProviders(search);
+      const deviceType = req.query.deviceType as DeviceType | undefined;
+      const providers = await UserService.listProviders(search, deviceType);
       return ApiResponse.success(res, 200, 'Providers fetched successfully', { providers });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async updateSkills(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { skills } = req.body as UpdateSkillsBody;
+      if (!Array.isArray(skills)) {
+        return ApiResponse.error(res, 400, 'skills must be an array of device types');
+      }
+
+      const user = await UserService.updateSkills({ userId: req.user!.id, skills });
+      return ApiResponse.success(res, 200, 'Skills updated successfully', { user });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async updateProviderSkills(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { skills } = req.body as UpdateSkillsBody;
+      if (!Array.isArray(skills)) {
+        return ApiResponse.error(res, 400, 'skills must be an array of device types');
+      }
+
+      const user = await UserService.updateSkills({ userId: req.params.id as string, skills });
+      return ApiResponse.success(res, 200, 'Provider skills updated successfully', { user });
     } catch (error) {
       next(error);
     }
