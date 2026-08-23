@@ -10,7 +10,7 @@ export const authorize = (roles: Role[]) => {
     }
 
     if (!roles.includes(req.user.role)) {
-      return res.status(403).json(ApiResponse.error(res, 403, "Forbidden: Insufficient permissions"));
+      return ApiResponse.error(res, 403, "Forbidden: Insufficient permissions");
     }
 
     return next();

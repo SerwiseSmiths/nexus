@@ -58,6 +58,11 @@ enum QuoteStatus {
 
 // ─── Wallet Enums ─────────────────────────────────────────────────────────────
 
+enum WalletType {
+  CUSTOMER
+  PROVIDER
+}
+
 enum WalletLedgerType {
   CREDIT
   DEBIT
@@ -70,6 +75,14 @@ enum WalletLedgerSource {
   ADMIN_ADJUSTMENT
   CASHBACK
   TRANSFER
+  WITHDRAWAL
+}
+
+enum PayoutRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PAID
 }
 
 enum PaymentProvider {
@@ -124,40 +137,61 @@ enum DevicePlatform {
 // ─── Core Models ──────────────────────────────────────────────────────────────
 
 model User {
-  id            String         @id @default(uuid())
-  phoneNo       String         @unique
-  email         String?        @unique
-  firstName     String?
-  lastName      String?
-  role          Role           @default(CUSTOMER)
-  avatar        String?
-  referralCode  String?        @unique
-  isActive      Boolean        @default(true)
-  isDeleted     Boolean        @default(false)
-  // Device types this provider is skilled to service — only meaningful for role: PROVIDER
-  skills        DeviceType[]   @default([])
-  refreshTokens RefreshToken[]
-  addresses     Address[]
-  devices       Device[]
+  id                   String           @id @default(uuid())
+  phoneNo              String           @unique
+  email                String?          @unique
+  firstName            String?
+  lastName             String?
+  role                 Role             @default(CUSTOMER)
+  avatar               String?
+  referralCode         String?          @unique
+  isActive             Boolean          @default(true)
+  isDeleted            Boolean          @default(false)
+  // Provider-only fields (skills, KYC addresses, admin notes) live on ProviderProfile,
+  // not here — role: CUSTOMER/ADMIN rows would otherwise carry permanently-null cruft.
+  providerProfile      ProviderProfile?
+  refreshTokens        RefreshToken[]
+  addresses            Address[]        @relation("UserAddresses")
+  devices              Device[]
   // Complaint relations
-  complaintsAsCustomer Complaint[]  @relation("CustomerComplaints")
-  complaintsAsProvider Complaint[]  @relation("ProviderComplaints")
+  complaintsAsCustomer Complaint[]      @relation("CustomerComplaints")
+  complaintsAsProvider Complaint[]      @relation("ProviderComplaints")
   // Notification relations
-  notifications  Notification[]
-  deviceTokens   DeviceToken[]
+  notifications        Notification[]
+  deviceTokens         DeviceToken[]
   // Wallet relations
-  wallet         Wallet?
-  walletLedger   WalletLedger[]
+  wallet               Wallet?
+  walletLedger         WalletLedger[]
+  payoutRequests       PayoutRequest[]
   // Payment relations
-  paymentOrders   PaymentOrder[]
-  paymentSessions PaymentSession[]
+  paymentOrders        PaymentOrder[]
+  paymentSessions      PaymentSession[]
   // Subscription relations
-  subscriptions  Subscription[]
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  subscriptions        Subscription[]
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
 
   @@index([phoneNo])
   @@index([referralCode])
+}
+
+// Provider-only profile data, split off User so CUSTOMER/ADMIN rows never
+// carry these fields as permanent nulls. One-to-one with User via userId.
+model ProviderProfile {
+  id               String       @id @default(uuid())
+  userId           String       @unique
+  user             User         @relation(fields: [userId], references: [id])
+  // Device types this provider is skilled to service
+  skills           DeviceType[] @default([])
+  currentAddressId String?      @unique
+  currentAddress   Address?     @relation("ProviderCurrentAddress", fields: [currentAddressId], references: [id])
+  aadharAddressId  String?      @unique
+  aadharAddress    Address?     @relation("ProviderAadharAddress", fields: [aadharAddressId], references: [id])
+  adminNotes       String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([userId])
 }
 
 model RefreshToken {
@@ -183,27 +217,30 @@ model Otp {
 }
 
 model Address {
-  id             String      @id @default(uuid())
-  userId         String
-  user           User        @relation(fields: [userId], references: [id])
-  title          String?
-  houseNo        String
-  societyName    String
-  addressLineOne String?
-  addressLineTwo String?
-  area           String?
-  pinCode        String?
-  city           String?
-  state          String?
-  country        String      @default("India")
-  latitude       String?
-  longitude      String?
-  directionNote  String?
-  complaints     Complaint[]
-  devices        Device[]
-  isDeleted      Boolean     @default(false)
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
+  id                 String           @id @default(uuid())
+  userId             String
+  user               User             @relation("UserAddresses", fields: [userId], references: [id])
+  // Reverse side of a provider's two dedicated address slots (see ProviderProfile.currentAddress / aadharAddress).
+  providerCurrentFor ProviderProfile? @relation("ProviderCurrentAddress")
+  providerAadharFor  ProviderProfile? @relation("ProviderAadharAddress")
+  title              String?
+  houseNo            String
+  societyName        String
+  addressLineOne     String?
+  addressLineTwo     String?
+  area               String?
+  pinCode            String?
+  city               String?
+  state              String?
+  country            String           @default("India")
+  latitude           String?
+  longitude          String?
+  directionNote      String?
+  complaints         Complaint[]
+  devices            Device[]
+  isDeleted          Boolean          @default(false)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 
   @@index([userId, isDeleted])
 }
@@ -219,9 +256,9 @@ model Device {
   type        DeviceType
   imageUrl    String?
   metadata    Json
-  workHistory   DeviceWorkHistory[]
-  complaints    Complaint[]
-  isDeleted     Boolean             @default(false)
+  workHistory DeviceWorkHistory[]
+  complaints  Complaint[]
+  isDeleted   Boolean             @default(false)
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
@@ -248,47 +285,47 @@ model DeviceWorkHistory {
 // ─── Complaint Models ─────────────────────────────────────────────────────────
 
 model Complaint {
-  id                  String         @id @default(uuid())
-  userId              String
-  providerId          String?
-  addressId           String
-  deviceId            String?
+  id         String         @id @default(uuid())
+  userId     String
+  providerId String?
+  addressId  String
+  deviceId   String?
   // Strapi content-type slug for the linked device type
-  deviceKey           String?
-  title               String
-  notes               String?
-  stage               ComplaintStage @default(ENTRANCE)
+  deviceKey  String?
+  title      String
+  notes      String?
+  stage      ComplaintStage @default(ENTRANCE)
 
   // Provider assignment tracking
-  providerAccepted    Boolean        @default(false)
+  providerAccepted    Boolean   @default(false)
   providerAcceptedAt  DateTime?
-  rejectedProviderIds String[]       @default([])
+  rejectedProviderIds String[]  @default([])
 
   // Physical entry QR (10-min expiry, provider scans on-site)
-  entryQrToken        String?        @unique
-  entryQrExpiresAt    DateTime?
+  entryQrToken     String?   @unique
+  entryQrExpiresAt DateTime?
 
   // Rejection metadata
-  rejectionReason     String?
-  rejectedAt          DateTime?
-  rejectedBy          String?
+  rejectionReason String?
+  rejectedAt      DateTime?
+  rejectedBy      String?
 
   // Reopen chain — parentId links to the original closed complaint
-  parentId            String?
+  parentId String?
 
   // Subscription — if this complaint is covered under a subscription visit
-  subscriptionId      String?
+  subscriptionId String?
 
   // Relations
-  user         User           @relation("CustomerComplaints", fields: [userId], references: [id])
-  provider     User?          @relation("ProviderComplaints", fields: [providerId], references: [id])
-  address      Address        @relation(fields: [addressId], references: [id])
-  device       Device?        @relation(fields: [deviceId], references: [id])
-  parent       Complaint?     @relation("ComplaintReopened", fields: [parentId], references: [id])
-  children     Complaint[]    @relation("ComplaintReopened")
-  subscription Subscription?  @relation(fields: [subscriptionId], references: [id])
-  media     ComplaintMedia[]
-  quote     Quote?
+  user          User             @relation("CustomerComplaints", fields: [userId], references: [id])
+  provider      User?            @relation("ProviderComplaints", fields: [providerId], references: [id])
+  address       Address          @relation(fields: [addressId], references: [id])
+  device        Device?          @relation(fields: [deviceId], references: [id])
+  parent        Complaint?       @relation("ComplaintReopened", fields: [parentId], references: [id])
+  children      Complaint[]      @relation("ComplaintReopened")
+  subscription  Subscription?    @relation(fields: [subscriptionId], references: [id])
+  media         ComplaintMedia[]
+  quote         Quote?
   notifications Notification[]
 
   isDeleted Boolean  @default(false)
@@ -320,7 +357,7 @@ model Quote {
   id          String      @id @default(uuid())
   complaintId String      @unique
   complaint   Complaint   @relation(fields: [complaintId], references: [id])
-  items       Json        // [{ description: string, amount: number }]
+  items       Json // [{ description: string, amount: number }]
   totalAmount Float       @default(0)
   notes       String?
   status      QuoteStatus @default(PENDING)
@@ -356,17 +393,22 @@ model Notification {
 // ─── Wallet Models ────────────────────────────────────────────────────────────
 
 model Wallet {
-  id        String         @id @default(uuid())
-  userId    String         @unique
-  user      User           @relation(fields: [userId], references: [id])
-  balance   Float          @default(0)
-  isActive  Boolean        @default(true)
-  isDeleted Boolean        @default(false)
-  ledger    WalletLedger[]
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
+  id             String          @id @default(uuid())
+  userId         String          @unique
+  user           User            @relation(fields: [userId], references: [id])
+  // walletType: CUSTOMER wallets are in-app spend/top-up balances; PROVIDER wallets are
+  // accrued earnings that will eventually be withdrawn. Derived from User.role at creation.
+  walletType     WalletType
+  balance        Float           @default(0)
+  isActive       Boolean         @default(true)
+  isDeleted      Boolean         @default(false)
+  ledger         WalletLedger[]
+  payoutRequests PayoutRequest[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   @@index([userId])
+  @@index([walletType])
 }
 
 model WalletLedger {
@@ -394,6 +436,27 @@ model WalletLedger {
   @@index([userId, createdAt(sort: Desc)])
 }
 
+// PayoutRequest: provider withdrawal requests against their earnings Wallet.
+// bankAccountRef is a placeholder until KYC/bank-account capture is built.
+model PayoutRequest {
+  id            String              @id @default(uuid())
+  walletId      String
+  wallet        Wallet              @relation(fields: [walletId], references: [id])
+  userId        String
+  user          User                @relation(fields: [userId], references: [id])
+  amount        Float
+  status        PayoutRequestStatus @default(PENDING)
+  bankAccountRef Json?
+  adminId       String?
+  processedAt   DateTime?
+  isDeleted     Boolean             @default(false)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@index([walletId])
+  @@index([userId, createdAt(sort: Desc)])
+}
+
 model DeviceToken {
   id        String         @id @default(uuid())
   userId    String
@@ -415,13 +478,13 @@ model PaymentOrder {
   userId            String
   user              User               @relation(fields: [userId], references: [id])
   razorpayOrderId   String             @unique
-  amount            Int                // in paise
+  amount            Int // in paise
   status            PaymentOrderStatus @default(PENDING)
   // purpose: "subscription" | "recharge" — drives fulfilment logic in webhook
   purpose           String
   // meta: snapshot of all data needed to fulfill the purpose after capture
   meta              Json
-  razorpayPaymentId String?            // populated after successful capture
+  razorpayPaymentId String? // populated after successful capture
   isDeleted         Boolean            @default(false)
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
@@ -444,12 +507,12 @@ model PaymentSession {
   id                  String               @id @default(uuid())
   userId              String
   user                User                 @relation(fields: [userId], references: [id])
-  phone               String               // user's phone, matched against webhook contact field
-  purpose             String               // subscription | recharge | complaint_payment
-  expectedAmountPaise Int                  // amount in paise, verified against webhook payload
-  meta                Json                 // subscription details, addon list, etc.
+  phone               String // user's phone, matched against webhook contact field
+  purpose             String // subscription | recharge | complaint_payment
+  expectedAmountPaise Int // amount in paise, verified against webhook payload
+  meta                Json // subscription details, addon list, etc.
   status              PaymentSessionStatus @default(PENDING)
-  expiresAt           DateTime             // 30-minute window
+  expiresAt           DateTime // 30-minute window
   isDeleted           Boolean              @default(false)
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
@@ -462,35 +525,35 @@ model PaymentSession {
 // ─── Subscription Models ──────────────────────────────────────────────────────
 
 model Subscription {
-  id             String             @id @default(uuid())
-  userId         String
-  user           User               @relation(fields: [userId], references: [id])
+  id            String @id @default(uuid())
+  userId        String
+  user          User   @relation(fields: [userId], references: [id])
   // Subscription covers all devices of this type for the user (e.g. "master_purifier")
-  deviceTypeKey  String
+  deviceTypeKey String
 
   // Plan snapshot captured at purchase time
-  planKey        String             // e.g. "LITE", "STANDARD", "COMPLETE"
+  planKey        String // e.g. "LITE", "STANDARD", "COMPLETE"
   planName       String
-  planBadgeColor String?            // hex color from CMS badge_color
+  planBadgeColor String? // hex color from CMS badge_color
   billingCycle   BillingCycle
-  planPrice      Float              // base plan price before addons
-  addons         Json               @default("[]") // [{ key, name, price }]
-  totalAmount    Float              // planPrice + sum(addon prices)
+  planPrice      Float // base plan price before addons
+  addons         Json         @default("[]") // [{ key, name, price }]
+  totalAmount    Float // planPrice + sum(addon prices)
 
   // Dual expiry: whichever fires first ends the subscription
-  maxServices    Int                // -1 = unlimited (time-only expiry)
-  servicesUsed   Int                @default(0)
-  startDate      DateTime
-  endDate        DateTime
+  maxServices  Int // -1 = unlimited (time-only expiry)
+  servicesUsed Int      @default(0)
+  startDate    DateTime
+  endDate      DateTime
 
-  status         SubscriptionStatus @default(ACTIVE)
+  status SubscriptionStatus @default(ACTIVE)
 
-  services       SubscriptionService[]
-  complaints     Complaint[]
+  services   SubscriptionService[]
+  complaints Complaint[]
 
-  isDeleted      Boolean            @default(false)
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
+  isDeleted Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId, isDeleted])
   @@index([userId, deviceTypeKey, status])
@@ -502,9 +565,9 @@ model SubscriptionService {
   subscriptionId String
   subscription   Subscription @relation(fields: [subscriptionId], references: [id])
   visitNumber    Int
-  scheduledDate  DateTime?    // informational estimated date for user
+  scheduledDate  DateTime? // informational estimated date for user
   completedDate  DateTime?
-  complaintId    String?      // set when complaint is raised against this visit
+  complaintId    String? // set when complaint is raised against this visit
   serviceKeys    Json         @default("[]") // service-part keys included in this visit
   isDeleted      Boolean      @default(false)
   createdAt      DateTime     @default(now())
