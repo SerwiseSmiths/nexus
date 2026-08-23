@@ -63,4 +63,25 @@ export class AddressService {
       data: { isDeleted: true },
     });
   }
+
+  static async restore(id: string, userId: string) {
+    const address = await prisma.address.findFirst({
+      where: { id, userId, isDeleted: true },
+    });
+
+    if (!address) return null;
+
+    return prisma.address.update({
+      where: { id },
+      data: { isDeleted: false },
+    });
+  }
+
+  /** Includes archived rows — admin needs to see and toggle them back, unlike the customer's own list. */
+  static async getAllByUserIncludingArchived(userId: string) {
+    return prisma.address.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
 }

@@ -260,4 +260,93 @@ router.post('/credit', authenticate, authorize([Role.ADMIN]), WalletController.c
  */
 router.post('/debit', authenticate, authorize([Role.ADMIN]), WalletController.debit);
 
+/**
+ * @swagger
+ * /wallet/payout-requests:
+ *   post:
+ *     summary: Request a payout from the current provider's earnings wallet (Provider only)
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - amount
+ *             properties:
+ *               amount:
+ *                 type: number
+ *                 minimum: 0.01
+ *     responses:
+ *       201:
+ *         description: Payout request created successfully
+ *       400:
+ *         description: Insufficient balance or validation error
+ *       403:
+ *         description: Not a provider wallet
+ *       404:
+ *         description: Wallet not found
+ *       401:
+ *         description: Unauthorized
+ */
+router.post('/payout-requests', authenticate, authorize([Role.PROVIDER]), WalletController.requestPayout);
+
+/**
+ * @swagger
+ * /wallet/payout-requests:
+ *   get:
+ *     summary: List the current provider's payout requests (Provider only)
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Payout requests fetched successfully
+ *       401:
+ *         description: Unauthorized
+ */
+router.get('/payout-requests', authenticate, authorize([Role.PROVIDER]), WalletController.getMyPayoutRequests);
+
+/**
+ * @swagger
+ * /wallet/payout-requests/{id}:
+ *   patch:
+ *     summary: Approve, reject, or mark a payout request paid (Admin only)
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - status
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 enum: [APPROVED, REJECTED, PAID]
+ *     responses:
+ *       200:
+ *         description: Payout request updated successfully
+ *       400:
+ *         description: Validation error or request already processed
+ *       404:
+ *         description: Payout request not found
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
+ */
+router.patch('/payout-requests/:id', authenticate, authorize([Role.ADMIN]), WalletController.updatePayoutRequest);
+
 export default router;

@@ -9,7 +9,7 @@
  * Safe to run multiple times — only creates wallets for users that don't have one.
  */
 
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Role, WalletType } from '@prisma/client';
 import { initializeConfig } from '../configs';
 import { logger } from '@/utils/logger';
 
@@ -32,7 +32,7 @@ async function main() {
         isDeleted: false,
         wallet:    null,
       },
-      select: { id: true, phoneNo: true },
+      select: { id: true, phoneNo: true, role: true },
     });
 
     logger.info(`[${stage}] Found ${users.length} user(s) without a wallet.`);
@@ -44,7 +44,8 @@ async function main() {
     let success = 0;
     for (const user of users) {
       try {
-        await prisma.wallet.create({ data: { userId: user.id } });
+        const walletType = user.role === Role.PROVIDER ? WalletType.PROVIDER : WalletType.CUSTOMER;
+        await prisma.wallet.create({ data: { userId: user.id, walletType } });
         logger.info(`  ✓ ${user.phoneNo}`);
         success++;
       } catch (err: unknown) {

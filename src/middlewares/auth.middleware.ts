@@ -52,7 +52,7 @@ export const auth = (req: AuthRequest, res: Response, next: NextFunction) => {
 
     return next();
   } catch (err) {
-    return res.status(401).json(ApiResponse.error(res, 401, "Invalid or Expired Token"));
+    return ApiResponse.error(res, 401, "Invalid or Expired Token");
   }
 };
 
