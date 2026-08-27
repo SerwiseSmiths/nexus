@@ -91,6 +91,15 @@ export interface UpdateProviderInput extends UpdateProviderBody {
   providerId: string;
 }
 
+export interface CreateCustomerBody {
+  firstName: string;
+  lastName: string;
+  phoneNo: string;
+  email?: string;
+}
+
+export interface CreateCustomerInput extends CreateCustomerBody {}
+
 export interface UpdateCustomerBody {
   firstName?: string;
   lastName?: string;

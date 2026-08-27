@@ -11,6 +11,7 @@ import type {
   UpdateSkillsBody,
   CreateProviderBody,
   UpdateProviderBody,
+  CreateCustomerBody,
   UpdateCustomerBody,
   BankAccountInput,
 } from '@/types/user.types';
@@ -198,6 +199,16 @@ export class UserController {
   }
 
   // ─── Customer management (admin) ───────────────────────────────────────────
+
+  static async createCustomer(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const body = req.body as CreateCustomerBody;
+      const customer = await UserService.createCustomer(body);
+      return ApiResponse.success(res, 201, 'Customer created successfully', { customer });
+    } catch (error) {
+      next(error);
+    }
+  }
 
   static async listCustomers(req: AuthRequest, res: Response, next: NextFunction) {
     try {

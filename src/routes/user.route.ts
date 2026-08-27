@@ -260,8 +260,30 @@ router.patch('/:id/skills', auth, authorize([Role.ADMIN]), UserController.update
  *         description: Filter by name, phone number, or pin code
  *     responses:
  *       200: { description: Customers fetched }
+ *   post:
+ *     summary: Create a customer account directly (ADMIN)
+ *     description: Admin-created customer — active immediately, no OTP verification (unlike self-service signup).
+ *     tags: [User]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [firstName, lastName, phoneNo]
+ *             properties:
+ *               firstName: { type: string }
+ *               lastName:  { type: string }
+ *               phoneNo:   { type: string }
+ *               email:     { type: string }
+ *     responses:
+ *       201: { description: Customer created successfully }
+ *       409: { description: Phone number or email already in use }
  */
 router.get('/customers', auth, authorize([Role.ADMIN]), UserController.listCustomers);
+router.post('/customers', auth, authorize([Role.ADMIN]), UserController.createCustomer);
 
 /**
  * @swagger

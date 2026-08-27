@@ -13,6 +13,7 @@ import type {
   CreateProviderInput,
   UpdateProviderInput,
   ProviderAddressInput,
+  CreateCustomerInput,
   UpdateCustomerInput,
 } from '@/types/user.types';
 
@@ -517,6 +518,39 @@ export class UserService {
   }
 
   // ─── Customer management (admin) ───────────────────────────────────────────
+
+  static async createCustomer({ firstName, lastName, phoneNo, email }: CreateCustomerInput) {
+    if (!firstName?.trim() || !lastName?.trim()) {
+      throw new ApiError(400, 'First and last name are required');
+    }
+    if (!phoneNo?.trim()) {
+      throw new ApiError(400, 'Phone number is required');
+    }
+
+    const existing = await prisma.user.findFirst({ where: { phoneNo, isDeleted: false } });
+    if (existing) throw new ApiError(409, 'A user with this phone number already exists');
+
+    if (email) {
+      const existingEmail = await prisma.user.findFirst({ where: { email, isDeleted: false } });
+      if (existingEmail) throw new ApiError(409, 'Email already in use');
+    }
+
+    const customer = await prisma.user.create({
+      data: {
+        firstName: firstName.trim(),
+        lastName:  lastName.trim(),
+        phoneNo:   phoneNo.trim(),
+        email:     email?.trim().toLowerCase() || null,
+        role:      Role.CUSTOMER,
+        isActive:  true,
+      },
+      select: {
+        id: true, phoneNo: true, email: true, firstName: true, lastName: true, avatar: true, createdAt: true, updatedAt: true,
+      },
+    });
+
+    return { ...customer, addresses: [], walletBalance: 0 };
+  }
 
   private static async getCustomerWalletBalance(customerId: string): Promise<number> {
     const wallet = await prisma.wallet.findUnique({ where: { userId: customerId } });

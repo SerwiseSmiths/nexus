@@ -260,10 +260,10 @@ router.post('/:id/quote', auth, authorize([Role.PROVIDER]), ComplaintController.
  * @swagger
  * /complaint/{id}/quote/respond:
  *   patch:
- *     summary: Approve or reject a quote (CUSTOMER)
+ *     summary: Approve or reject a quote (CUSTOMER, or ADMIN acting on the customer's behalf)
  *     description: >
  *       Approve → moves to PAYMENT (or COMPLETED if totalAmount = 0).
- *       Reject → moves back to ESTIMATION for provider to revise.
+ *       Reject → moves to REJECTED and closes the complaint.
  *     tags: [Complaint]
  *     security:
  *       - bearerAuth: []
@@ -285,7 +285,7 @@ router.post('/:id/quote', auth, authorize([Role.PROVIDER]), ComplaintController.
 router.patch(
   '/:id/quote/respond',
   auth,
-  authorize([Role.CUSTOMER]),
+  authorize([Role.CUSTOMER, Role.ADMIN]),
   ComplaintController.respondToQuote,
 );
 

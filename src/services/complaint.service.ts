@@ -543,9 +543,9 @@ export class ComplaintService {
     return { complaint: updatedComplaint, quote };
   }
 
-  static async respondToQuote({ complaintId, userId, approved, rejectionReason }: RespondToQuoteInput) {
+  static async respondToQuote({ complaintId, userId, approved, rejectionReason, asAdmin }: RespondToQuoteInput) {
     const complaint = await prisma.complaint.findFirst({
-      where:   { id: complaintId, userId, isDeleted: false },
+      where:   { id: complaintId, ...(asAdmin ? {} : { userId }), isDeleted: false },
       include: { quote: true },
     });
     if (!complaint) throw new ApiError(404, 'Complaint not found');
