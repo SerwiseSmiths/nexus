@@ -50,6 +50,13 @@ export interface ProviderAddressInput {
   longitude?: string;
 }
 
+export interface BankAccountInput {
+  bankName: string;
+  accountNumber: string;
+  ifscCode: string;
+  accountHolderName: string;
+}
+
 export interface CreateProviderBody {
   firstName: string;
   lastName: string;
@@ -77,6 +84,7 @@ export interface UpdateProviderBody {
   isActive?: boolean;
   imageBase64?: string;
   imageMimeType?: string;
+  bankAccount?: BankAccountInput;
 }
 
 export interface UpdateProviderInput extends UpdateProviderBody {

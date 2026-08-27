@@ -2,6 +2,7 @@ import { ComplaintStage, DeviceType, Prisma, Role } from '@prisma/client';
 import prisma from '@/services/prisma.service';
 import { UploadService } from '@/services/upload.service';
 import { AddressService } from '@/services/address.service';
+import { BankService } from '@/services/bank.service';
 import { ApiError } from '@/utils/apiResponse';
 import { generateUniqueReferralCode } from '@/utils/referralCode';
 import type {
@@ -75,6 +76,17 @@ const PROVIDER_DETAIL_SELECT = {
       currentAddress: { select: PROVIDER_ADDRESS_SELECT },
       aadharAddress:  { select: PROVIDER_ADDRESS_SELECT },
       adminNotes:     true,
+      bankAccount: {
+        select: {
+          bankName:          true,
+          accountNumber:     true,
+          ifscCode:          true,
+          accountHolderName: true,
+          isApproved:        true,
+          approvedAt:        true,
+          lastChangedAt:     true,
+        },
+      },
     },
   },
 } satisfies Prisma.UserSelect;
@@ -92,6 +104,7 @@ function flattenProviderDetail(user: ProviderDetailRow) {
     currentAddress: providerProfile?.currentAddress ?? null,
     aadharAddress:  providerProfile?.aadharAddress ?? null,
     adminNotes:     providerProfile?.adminNotes ?? null,
+    bankAccount:    providerProfile?.bankAccount ?? null,
   };
 }
 
@@ -433,6 +446,7 @@ export class UserService {
     isActive,
     imageBase64,
     imageMimeType,
+    bankAccount,
   }: UpdateProviderInput) {
     const provider = await prisma.user.findFirst({
       where:   { id: providerId, role: Role.PROVIDER, isDeleted: false },
@@ -490,8 +504,16 @@ export class UserService {
       select: PROVIDER_DETAIL_SELECT,
     });
 
+    // Admin edits bypass the provider's 7-day self-service lock.
+    if (bankAccount !== undefined) {
+      await BankService.upsertForUser(providerId, bankAccount, { enforceLock: false });
+    }
+
     const stats = await UserService.computeProviderStats(providerId);
-    return { ...flattenProviderDetail(updated), stats };
+    const final = bankAccount !== undefined
+      ? await prisma.user.findUniqueOrThrow({ where: { id: providerId }, select: PROVIDER_DETAIL_SELECT })
+      : updated;
+    return { ...flattenProviderDetail(final), stats };
   }
 
   // ─── Customer management (admin) ───────────────────────────────────────────
