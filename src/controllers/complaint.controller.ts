@@ -23,9 +23,14 @@ export class ComplaintController {
       const parsed = CreateComplaintSchema.safeParse(req.body);
       if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
 
+      const isAdmin = req.user!.role === Role.ADMIN;
+      if (isAdmin && !parsed.data.customerId) {
+        return ApiResponse.error(res, 400, 'customerId is required when creating a ticket as ADMIN');
+      }
+
       const complaints = await ComplaintService.createComplaint({
-        userId: req.user!.id,
         ...parsed.data,
+        userId: isAdmin ? parsed.data.customerId! : req.user!.id,
       });
 
       if (complaints.length === 1) {
