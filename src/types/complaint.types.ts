@@ -12,6 +12,9 @@ export const CreateComplaintSchema = z.object({
   deviceId:  z.string().uuid('Invalid device ID').optional(),
   deviceIds: z.array(z.string().uuid('Invalid device ID')).min(1).optional(),
   deviceKey: z.string().optional(),
+  // Only read when the caller is ADMIN — identifies which customer the ticket is
+  // raised for, since an admin isn't the complaint's owner the way a customer is.
+  customerId: z.string().uuid('Invalid customer ID').optional(),
 });
 
 export const UpdateStageSchema = z.object({

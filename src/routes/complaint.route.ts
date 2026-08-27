@@ -19,7 +19,8 @@ const router = Router();
  * @swagger
  * /complaint:
  *   post:
- *     summary: Create a new complaint (CUSTOMER)
+ *     summary: Create a new complaint (CUSTOMER, or ADMIN on a customer's behalf)
+ *     description: When called by ADMIN, customerId is required and identifies whose ticket this is.
  *     tags: [Complaint]
  *     security:
  *       - bearerAuth: []
@@ -31,16 +32,17 @@ const router = Router();
  *             type: object
  *             required: [title, addressId]
  *             properties:
- *               title:     { type: string, example: "RO not producing water" }
- *               notes:     { type: string }
- *               addressId: { type: string, format: uuid }
- *               deviceId:  { type: string, format: uuid }
- *               deviceKey: { type: string, example: master_purifier }
+ *               title:      { type: string, example: "RO not producing water" }
+ *               notes:      { type: string }
+ *               addressId:  { type: string, format: uuid }
+ *               deviceId:   { type: string, format: uuid }
+ *               deviceKey:  { type: string, example: master_purifier }
+ *               customerId: { type: string, format: uuid, description: "Required when called by ADMIN" }
  *     responses:
  *       201: { description: Complaint created }
  *       400: { description: Validation error }
  */
-router.post('/', auth, authorize([Role.CUSTOMER]), ComplaintController.createComplaint);
+router.post('/', auth, authorize([Role.CUSTOMER, Role.ADMIN]), ComplaintController.createComplaint);
 
 /**
  * @swagger
