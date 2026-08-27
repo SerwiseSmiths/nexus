@@ -188,10 +188,33 @@ model ProviderProfile {
   aadharAddressId  String?      @unique
   aadharAddress    Address?     @relation("ProviderAadharAddress", fields: [aadharAddressId], references: [id])
   adminNotes       String?
+  bankAccount      ProviderBankAccount?
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
 
   @@index([userId])
+}
+
+// Provider payout bank details. Editing (by the provider or an admin) always
+// clears isApproved — approval is a separate, explicit admin action. Providers
+// are additionally rate-limited to one self-service edit per 7 days via
+// lastChangedAt (see BankService.upsertForUser); admin edits are not.
+model ProviderBankAccount {
+  id                String    @id @default(uuid())
+  providerProfileId String    @unique
+  providerProfile   ProviderProfile @relation(fields: [providerProfileId], references: [id])
+  bankName          String
+  accountNumber     String
+  ifscCode          String
+  accountHolderName String
+  isApproved        Boolean   @default(false)
+  approvedAt        DateTime?
+  lastChangedAt     DateTime  @default(now())
+  isDeleted         Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([providerProfileId])
 }
 
 model RefreshToken {

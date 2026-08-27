@@ -195,6 +195,25 @@ router.patch('/providers/:id', auth, authorize([Role.ADMIN]), UserController.upd
 
 /**
  * @swagger
+ * /user/providers/{id}/bank-account/approve:
+ *   patch:
+ *     summary: Approve a provider's payout bank account details (ADMIN)
+ *     tags: [User]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Bank account approved successfully }
+ *       404: { description: Provider has no bank details to approve }
+ */
+router.patch('/providers/:id/bank-account/approve', auth, authorize([Role.ADMIN]), UserController.approveProviderBankAccount);
+
+/**
+ * @swagger
  * /user/{id}/skills:
  *   patch:
  *     summary: Set a provider's skills (ADMIN)

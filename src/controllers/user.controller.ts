@@ -3,6 +3,7 @@ import { DeviceType } from '@prisma/client';
 import { AuthRequest } from '@/middlewares/auth.middleware';
 import { UserService } from '@/services/user.service';
 import { AddressService, type CreateAddressInput, type UpdateAddressInput } from '@/services/address.service';
+import { BankService } from '@/services/bank.service';
 import { ApiResponse } from '@/utils/apiResponse';
 import type {
   UploadAvatarBody,
@@ -11,6 +12,7 @@ import type {
   CreateProviderBody,
   UpdateProviderBody,
   UpdateCustomerBody,
+  BankAccountInput,
 } from '@/types/user.types';
 
 interface UpdateEmailBody { email: string; }
@@ -152,6 +154,44 @@ export class UserController {
 
       const user = await UserService.updateSkills({ userId: req.params.id as string, skills });
       return ApiResponse.success(res, 200, 'Provider skills updated successfully', { user });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // ─── Bank account (self-service + admin approval) ─────────────────────────
+
+  static async getMyBankAccount(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const result = await BankService.getForUser(req.user!.id);
+      return ApiResponse.success(res, 200, 'Bank account fetched successfully', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async upsertMyBankAccount(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { bankName, accountNumber, ifscCode, accountHolderName } = req.body as BankAccountInput;
+      if (!bankName?.trim() || !accountNumber?.trim() || !ifscCode?.trim() || !accountHolderName?.trim()) {
+        return ApiResponse.error(res, 400, 'bankName, accountNumber, ifscCode, and accountHolderName are required');
+      }
+
+      const bankAccount = await BankService.upsertForUser(
+        req.user!.id,
+        { bankName, accountNumber, ifscCode, accountHolderName },
+        { enforceLock: true },
+      );
+      return ApiResponse.success(res, 200, 'Bank account updated successfully', { bankAccount });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async approveProviderBankAccount(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const bankAccount = await BankService.approve(req.params.id as string);
+      return ApiResponse.success(res, 200, 'Bank account approved successfully', { bankAccount });
     } catch (error) {
       next(error);
     }

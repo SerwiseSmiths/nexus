@@ -18,6 +18,7 @@ const OTP_MAX_ATTEMPTS = 5;
 const TEST_PHONES: Record<string, string> = {
   "1234567890": "123456",
   "9112345678": "123456",
+  "7016301968": "123456",
 };
 
 export class AuthService {
