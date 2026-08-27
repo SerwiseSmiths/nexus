@@ -1,4 +1,5 @@
 import { Response, NextFunction } from 'express';
+import { Role } from '@prisma/client';
 import { AuthRequest } from '@/middlewares/auth.middleware';
 import { ComplaintService } from '@/services/complaint.service';
 import { ApiResponse } from '@/utils/apiResponse';
@@ -165,6 +166,7 @@ export class ComplaintController {
       const complaint = await ComplaintService.respondToQuote({
         complaintId: req.params.id as string,
         userId:      req.user!.id,
+        asAdmin:     req.user!.role === Role.ADMIN,
         ...parsed.data,
       });
 

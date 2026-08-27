@@ -4,7 +4,7 @@ import { config } from "../configs";
 import prisma from "./prisma.service";
 import { sendOtpSms } from "./hanuotp.service";
 import { logger } from "@/utils/logger";
-import { Role, NotificationType, WalletLedgerSource } from "@prisma/client";
+import { Role, NotificationType, WalletLedgerSource, WalletType } from "@prisma/client";
 import { NotificationService } from '@/services/notification.service';
 import { ApiError } from "../utils/apiResponse";
 import { generateUniqueReferralCode } from "../utils/referralCode";
@@ -18,6 +18,7 @@ const OTP_MAX_ATTEMPTS = 5;
 const TEST_PHONES: Record<string, string> = {
   "1234567890": "123456",
   "9112345678": "123456",
+  "7016301968": "123456",
 };
 
 export class AuthService {
@@ -105,7 +106,9 @@ export class AuthService {
         const created = await tx.user.create({
           data: { phoneNo, role, referralCode },
         });
-        await tx.wallet.create({ data: { userId: created.id } });
+        await tx.wallet.create({
+          data: { userId: created.id, walletType: role === Role.PROVIDER ? WalletType.PROVIDER : WalletType.CUSTOMER },
+        });
         return created;
       });
       TelegramService.notifyNewUser(user).catch(() => {});

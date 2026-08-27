@@ -18,4 +18,21 @@ export class UploadService {
 
     return result.secure_url;
   }
+
+  static async uploadProviderImage(base64: string, mimeType: string, providerId: string): Promise<string> {
+    const dataUri = `data:${mimeType};base64,${base64}`;
+
+    const result = await cloudinary.uploader.upload(dataUri, {
+      folder: 'serwise/providers',
+      public_id: `provider_${providerId}`,
+      overwrite: true,
+      transformation: [{ width: 400, height: 400, crop: 'fill', gravity: 'face' }],
+    });
+
+    if (!result.secure_url) {
+      throw new ApiError(500, 'Failed to upload image');
+    }
+
+    return result.secure_url;
+  }
 }

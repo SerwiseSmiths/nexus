@@ -1,4 +1,4 @@
-import { WalletLedgerSource, PaymentProvider } from '@prisma/client';
+import { WalletLedgerSource, PaymentProvider, PayoutRequestStatus } from '@prisma/client';
 
 export interface CreditWalletBody {
   userId:          string;
@@ -39,4 +39,22 @@ export interface SendMoneyInput {
   senderUserId:   string;
   recipientPhone: string;
   amount:         number;
+}
+
+export interface CreatePayoutRequestBody {
+  amount: number;
+}
+
+export interface CreatePayoutRequestInput extends CreatePayoutRequestBody {
+  userId: string;
+}
+
+export interface UpdatePayoutRequestBody {
+  status: PayoutRequestStatus;
+}
+
+export interface UpdatePayoutRequestInput {
+  payoutRequestId: string;
+  status:          PayoutRequestStatus;
+  adminId:         string;
 }

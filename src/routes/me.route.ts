@@ -204,6 +204,47 @@ router.get('/addresses/:id', auth, AddressController.getOne);
 router.put('/addresses/:id', auth, AddressController.update);
 router.delete('/addresses/:id', auth, AddressController.remove);
 
+// ─── Bank account ────────────────────────────────────────────────────────────
+
+/**
+ * @swagger
+ * /me/bank-account:
+ *   get:
+ *     summary: Get own payout bank account details
+ *     description: Returns canEdit/nextEditableAt computed from the 7-day self-service edit lock.
+ *     tags: [Me]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Bank account fetched successfully
+ *   put:
+ *     summary: Create or update own payout bank account details
+ *     description: Rejected with 400 if the last self-service edit was within the last 7 days. Clears any prior admin approval.
+ *     tags: [Me]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [bankName, accountNumber, ifscCode, accountHolderName]
+ *             properties:
+ *               bankName:          { type: string }
+ *               accountNumber:     { type: string }
+ *               ifscCode:          { type: string }
+ *               accountHolderName: { type: string }
+ *     responses:
+ *       200:
+ *         description: Bank account updated successfully
+ *       400:
+ *         description: Validation error or edit lock still active
+ */
+router.get('/bank-account', auth, UserController.getMyBankAccount);
+router.put('/bank-account', auth, authorize([Role.PROVIDER]), UserController.upsertMyBankAccount);
+
 // ─── Wallet ───────────────────────────────────────────────────────────────────
 
 /**

@@ -110,6 +110,10 @@ export interface AddQuoteInput extends AddQuoteDto {
 export interface RespondToQuoteInput extends RespondToQuoteDto {
   complaintId: string;
   userId:      string;
+  // True when an ADMIN is acting on the customer's behalf from watchtower —
+  // skips the userId ownership filter (admin isn't the complaint's customer)
+  // but rejectedBy still records the real actor (the admin), not the customer.
+  asAdmin?:    boolean;
 }
 
 export interface LinkDeviceInput extends LinkDeviceDto {

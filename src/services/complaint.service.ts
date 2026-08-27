@@ -1,4 +1,4 @@
-import { ComplaintStage, NotificationType, Prisma, QuoteStatus, Role, WorkHistoryEvent } from '@prisma/client';
+import { ComplaintStage, NotificationType, PaymentProvider, Prisma, QuoteStatus, Role, WorkHistoryEvent } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import prisma from '@/services/prisma.service';
 import { ApiError } from '@/utils/apiResponse';
@@ -6,6 +6,7 @@ import { logger } from '@/utils/logger';
 import { RealtimeService } from '@/services/realtime.service';
 import { NotificationService } from '@/services/notification.service';
 import { TelegramService } from '@/services/telegram.service';
+import { WalletService } from '@/services/wallet.service';
 import type {
   CreateComplaintInput,
   UpdateStageInput,
@@ -230,7 +231,7 @@ export class ComplaintService {
         isActive:  true,
         isDeleted: false,
         id: excludeIds.length > 0 ? { notIn: excludeIds } : undefined,
-        ...(deviceType && { skills: { has: deviceType } }),
+        ...(deviceType && { providerProfile: { skills: { has: deviceType } } }),
       },
       include: {
         _count: {
@@ -542,9 +543,9 @@ export class ComplaintService {
     return { complaint: updatedComplaint, quote };
   }
 
-  static async respondToQuote({ complaintId, userId, approved, rejectionReason }: RespondToQuoteInput) {
+  static async respondToQuote({ complaintId, userId, approved, rejectionReason, asAdmin }: RespondToQuoteInput) {
     const complaint = await prisma.complaint.findFirst({
-      where:   { id: complaintId, userId, isDeleted: false },
+      where:   { id: complaintId, ...(asAdmin ? {} : { userId }), isDeleted: false },
       include: { quote: true },
     });
     if (!complaint) throw new ApiError(404, 'Complaint not found');
@@ -959,43 +960,26 @@ export class ComplaintService {
     }
 
     const totalAmount = complaint.quote?.totalAmount ?? 0;
+    const paymentProvider = method === 'CASH' ? PaymentProvider.CASH : PaymentProvider.RAZORPAY;
 
-    const updated = await prisma.complaint.update({
-      where: { id: complaintId },
-      data:  { stage: ComplaintStage.COMPLETED },
-      include: COMPLAINT_INCLUDE,
+    const updated = await prisma.$transaction(async (tx) => {
+      const updatedComplaint = await tx.complaint.update({
+        where: { id: complaintId },
+        data:  { stage: ComplaintStage.COMPLETED },
+        include: COMPLAINT_INCLUDE,
+      });
+
+      // Credit provider wallet — routed through WalletService for the same
+      // serializable-isolation / audit-ledger guarantees every other wallet
+      // mutation gets, composed inside this same transaction.
+      if (totalAmount > 0) {
+        await WalletService.creditProviderEarnings(providerId, totalAmount, complaintId, paymentProvider, tx);
+      }
+
+      return updatedComplaint;
     });
 
     await ComplaintService.recordServiceCompletionHistory(complaint.deviceId, complaint.quote?.items);
-
-    // Credit provider wallet
-    if (totalAmount > 0) {
-      const wallet = await prisma.wallet.upsert({
-        where:  { userId: providerId },
-        create: { userId: providerId, balance: 0 },
-        update: {},
-      });
-
-      await prisma.wallet.update({
-        where: { id: wallet.id },
-        data:  { balance: { increment: totalAmount } },
-      });
-
-      await prisma.walletLedger.create({
-        data: {
-          walletId:        wallet.id,
-          userId:          providerId,
-          type:            'CREDIT',
-          source:          'ORDER_PAYMENT',
-          amount:          totalAmount,
-          openingBalance:  wallet.balance,
-          closingBalance:  wallet.balance + totalAmount,
-          paymentProvider: method === 'CASH' ? 'CASH' : 'RAZORPAY',
-          updateBalance:   true,
-          refId:           complaintId,
-        },
-      });
-    }
 
     emit(() =>
       RealtimeService.emitStageChanged(

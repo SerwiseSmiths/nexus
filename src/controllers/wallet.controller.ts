@@ -1,6 +1,6 @@
 import { NextFunction, Response } from 'express';
 import { z } from 'zod';
-import { WalletLedgerSource } from '@prisma/client';
+import { PayoutRequestStatus, WalletLedgerSource } from '@prisma/client';
 import { ApiError, ApiResponse } from '@/utils/apiResponse';
 import { WalletService } from '@/services/wallet.service';
 import type { AuthRequest } from '@/middlewares/auth.middleware';
@@ -16,6 +16,16 @@ const creditDebitSchema = z.object({
   source:  z.nativeEnum(WalletLedgerSource, { error: 'Invalid source' }),
   refId:   z.string().optional(),
   meta:    z.record(z.string(), z.unknown()).optional(),
+});
+
+const createPayoutRequestSchema = z.object({
+  amount: z.number({ error: 'Amount must be a number' }).positive('Amount must be positive'),
+});
+
+const updatePayoutRequestSchema = z.object({
+  status: z.enum([PayoutRequestStatus.APPROVED, PayoutRequestStatus.REJECTED, PayoutRequestStatus.PAID], {
+    error: 'Invalid status',
+  }),
 });
 
 export class WalletController {
@@ -86,6 +96,46 @@ export class WalletController {
 
       const result = await WalletService.getWalletHistory({ userId: req.user!.id, page, limit });
       ApiResponse.success(res, 200, 'Wallet history fetched successfully', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async requestPayout(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const parsed = createPayoutRequestSchema.safeParse(req.body);
+      if (!parsed.success) throw new ApiError(400, 'Validation failed', parsed.error.flatten());
+
+      const result = await WalletService.createPayoutRequest({ userId: req.user!.id, amount: parsed.data.amount });
+      ApiResponse.success(res, 201, 'Payout request created successfully', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getMyPayoutRequests(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const result = await WalletService.getPayoutRequests(req.user!.id);
+      ApiResponse.success(res, 200, 'Payout requests fetched successfully', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async updatePayoutRequest(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const id = req.params.id as string;
+      if (!id) throw new ApiError(400, 'id is required');
+
+      const parsed = updatePayoutRequestSchema.safeParse(req.body);
+      if (!parsed.success) throw new ApiError(400, 'Validation failed', parsed.error.flatten());
+
+      const result = await WalletService.updatePayoutRequestStatus({
+        payoutRequestId: id,
+        status:          parsed.data.status,
+        adminId:         req.user!.id,
+      });
+      ApiResponse.success(res, 200, 'Payout request updated successfully', result);
     } catch (error) {
       next(error);
     }
