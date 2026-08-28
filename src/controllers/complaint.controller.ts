@@ -265,6 +265,7 @@ export class ComplaintController {
       const complaint = await ComplaintService.reopenComplaint({
         complaintId: req.params.id as string,
         userId:      req.user!.id,
+        asAdmin:     req.user!.role === Role.ADMIN,
         ...parsed.data,
       });
 

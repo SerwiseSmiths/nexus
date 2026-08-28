@@ -133,6 +133,10 @@ export interface ValidateQrInput extends ValidateQrDto {
 export interface ReopenComplaintInput {
   complaintId: string;
   userId:      string;
+  // True when an ADMIN is reopening on the customer's behalf from watchtower —
+  // skips the userId ownership filter and reopens as the original complaint's
+  // owner rather than the admin.
+  asAdmin?:    boolean;
   title?:      string;
   notes?:      string;
   addressId?:  string;

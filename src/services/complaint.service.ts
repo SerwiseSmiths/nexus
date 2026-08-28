@@ -801,12 +801,13 @@ export class ComplaintService {
   static async reopenComplaint({
     complaintId,
     userId,
+    asAdmin,
     title,
     notes,
     addressId,
   }: ReopenComplaintInput): Promise<ComplaintWithRelations> {
     const original = await prisma.complaint.findFirst({
-      where: { id: complaintId, userId, isDeleted: false },
+      where: { id: complaintId, ...(asAdmin ? {} : { userId }), isDeleted: false },
     });
     if (!original) throw new ApiError(404, 'Complaint not found');
 
@@ -817,9 +818,11 @@ export class ComplaintService {
       throw new ApiError(400, 'Only completed or rejected complaints can be reopened');
     }
 
+    const ownerId = asAdmin ? original.userId : userId;
+
     const newComplaint = await prisma.complaint.create({
       data: {
-        userId,
+        userId:    ownerId,
         title:     title ?? original.title,
         notes:     notes ?? null,
         addressId: addressId ?? original.addressId,
@@ -833,7 +836,7 @@ export class ComplaintService {
 
     emit(() =>
       NotificationService.sendToUser({
-        userId,
+        userId: ownerId,
         title: 'Complaint Reopened',
         body:  'Your complaint has been reopened. We are finding a provider.',
         type:  NotificationType.COMPLAINT,
