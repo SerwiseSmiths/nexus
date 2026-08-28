@@ -458,7 +458,7 @@ router.post(
  * @swagger
  * /complaint/{id}/reopen:
  *   post:
- *     summary: Reopen a completed or rejected complaint as a new one (CUSTOMER)
+ *     summary: Reopen a completed or rejected complaint as a new one (CUSTOMER, or ADMIN on the customer's behalf)
  *     description: Creates a new complaint with parentId pointing to the original.
  *     tags: [Complaint]
  *     security:
@@ -481,7 +481,7 @@ router.post(
 router.post(
   '/:id/reopen',
   auth,
-  authorize([Role.CUSTOMER]),
+  authorize([Role.CUSTOMER, Role.ADMIN]),
   ComplaintController.reopenComplaint,
 );
 
