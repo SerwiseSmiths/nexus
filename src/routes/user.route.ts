@@ -146,6 +146,7 @@ router.patch('/email', auth, UserController.updateEmail);
  *               currentAddress: { type: object }
  *               aadharAddress:  { type: object }
  *               adminNotes:     { type: string }
+ *               providerTierId: { type: string, nullable: true, description: "id of a provider tier from GET /provider-tiers" }
  *               imageBase64:    { type: string }
  *               imageMimeType:  { type: string }
  *     responses:

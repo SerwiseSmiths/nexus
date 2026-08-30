@@ -73,10 +73,12 @@ const PROVIDER_DETAIL_SELECT = {
   updatedAt: true,
   providerProfile: {
     select: {
-      skills:         true,
-      currentAddress: { select: PROVIDER_ADDRESS_SELECT },
-      aadharAddress:  { select: PROVIDER_ADDRESS_SELECT },
-      adminNotes:     true,
+      skills:          true,
+      currentAddress:  { select: PROVIDER_ADDRESS_SELECT },
+      aadharAddress:   { select: PROVIDER_ADDRESS_SELECT },
+      adminNotes:      true,
+      providerTierId:  true,
+      providerTier:    { select: { id: true, name: true, color: true } },
       bankAccount: {
         select: {
           bankName:          true,
@@ -101,15 +103,24 @@ function flattenProviderDetail(user: ProviderDetailRow) {
   const { providerProfile, ...rest } = user;
   return {
     ...rest,
-    skills:         providerProfile?.skills ?? [],
-    currentAddress: providerProfile?.currentAddress ?? null,
-    aadharAddress:  providerProfile?.aadharAddress ?? null,
-    adminNotes:     providerProfile?.adminNotes ?? null,
-    bankAccount:    providerProfile?.bankAccount ?? null,
+    skills:             providerProfile?.skills ?? [],
+    currentAddress:     providerProfile?.currentAddress ?? null,
+    aadharAddress:      providerProfile?.aadharAddress ?? null,
+    adminNotes:         providerProfile?.adminNotes ?? null,
+    bankAccount:        providerProfile?.bankAccount ?? null,
+    providerTierId:     providerProfile?.providerTierId ?? null,
+    providerTierName:   providerProfile?.providerTier?.name ?? null,
+    providerTierColor:  providerProfile?.providerTier?.color ?? null,
   };
 }
 
 const EMPTY_STATS = { complaintSuccess: 0, overdue: 0, walletBalance: 0 };
+
+async function assertValidProviderTierId(tierId: string | null | undefined): Promise<void> {
+  if (!tierId) return;
+  const tier = await prisma.providerTier.findFirst({ where: { id: tierId, isDeleted: false, isActive: true } });
+  if (!tier) throw new ApiError(400, `Invalid or inactive provider tier: ${tierId}`);
+}
 
 /** Ensures the user has a referral code, generating one if missing (lazy backfill). */
 async function ensureReferralCode(userId: string): Promise<string> {
@@ -373,6 +384,7 @@ export class UserService {
     currentAddress,
     aadharAddress,
     adminNotes,
+    providerTierId,
     imageBase64,
     imageMimeType,
   }: CreateProviderInput) {
@@ -390,6 +402,8 @@ export class UserService {
       const existingEmail = await prisma.user.findFirst({ where: { email, isDeleted: false } });
       if (existingEmail) throw new ApiError(409, 'Email already in use');
     }
+
+    await assertValidProviderTierId(providerTierId);
 
     const provider = await prisma.$transaction(async (tx) => {
       const created = await tx.user.create({
@@ -415,6 +429,7 @@ export class UserService {
           userId: created.id,
           skills: skills ?? [],
           adminNotes: adminNotes ?? null,
+          providerTierId: providerTierId ?? null,
           currentAddressId,
           aadharAddressId,
         },
@@ -444,6 +459,7 @@ export class UserService {
     currentAddress,
     aadharAddress,
     adminNotes,
+    providerTierId,
     isActive,
     imageBase64,
     imageMimeType,
@@ -454,6 +470,10 @@ export class UserService {
       include: { providerProfile: true },
     });
     if (!provider) throw new ApiError(404, 'Provider not found');
+
+    if (providerTierId !== undefined) {
+      await assertValidProviderTierId(providerTierId);
+    }
 
     if (phoneNo && phoneNo !== provider.phoneNo) {
       const existing = await prisma.user.findFirst({ where: { phoneNo, isDeleted: false } });
@@ -473,7 +493,13 @@ export class UserService {
       ? await UserService.upsertProviderAddress(provider.providerProfile?.aadharAddressId, aadharAddress, providerId)
       : undefined;
 
-    if (skills !== undefined || currentAddressId !== undefined || aadharAddressId !== undefined || adminNotes !== undefined) {
+    if (
+      skills !== undefined ||
+      currentAddressId !== undefined ||
+      aadharAddressId !== undefined ||
+      adminNotes !== undefined ||
+      providerTierId !== undefined
+    ) {
       await prisma.providerProfile.upsert({
         where: { userId: providerId },
         update: {
@@ -481,6 +507,7 @@ export class UserService {
           ...(currentAddressId !== undefined && { currentAddressId }),
           ...(aadharAddressId !== undefined && { aadharAddressId }),
           ...(adminNotes !== undefined && { adminNotes }),
+          ...(providerTierId !== undefined && { providerTierId }),
         },
         create: {
           userId: providerId,
@@ -488,6 +515,7 @@ export class UserService {
           currentAddressId: currentAddressId ?? null,
           aadharAddressId:  aadharAddressId ?? null,
           adminNotes: adminNotes ?? null,
+          providerTierId: providerTierId ?? null,
         },
       });
     }
