@@ -188,11 +188,32 @@ model ProviderProfile {
   aadharAddressId  String?      @unique
   aadharAddress    Address?     @relation("ProviderAadharAddress", fields: [aadharAddressId], references: [id])
   adminNotes       String?
+  // Manually assigned by an admin (Watchtower); nothing reads this yet — see
+  // ProviderTier below.
+  providerTierId   String?
+  providerTier     ProviderTier? @relation(fields: [providerTierId], references: [id])
   bankAccount      ProviderBankAccount?
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
 
   @@index([userId])
+  @@index([providerTierId])
+}
+
+// Admin-configurable provider tier/level list, managed entirely in Watchtower
+// (not Strapi — see console CLAUDE.md, tiers are Nexus-native). Label only for
+// now: nothing reads this to change behavior yet.
+model ProviderTier {
+  id          String            @id @default(uuid())
+  name        String
+  order       Int               @default(0)
+  isActive    Boolean           @default(true)
+  description String?
+  color       String?
+  isDeleted   Boolean           @default(false)
+  providers   ProviderProfile[]
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
 }
 
 // Provider payout bank details. Editing (by the provider or an admin) always

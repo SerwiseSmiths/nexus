@@ -66,6 +66,7 @@ export interface CreateProviderBody {
   currentAddress?: ProviderAddressInput;
   aadharAddress?: ProviderAddressInput;
   adminNotes?: string;
+  providerTierId?: string | null;
   imageBase64?: string;
   imageMimeType?: string;
 }
@@ -81,6 +82,7 @@ export interface UpdateProviderBody {
   currentAddress?: ProviderAddressInput;
   aadharAddress?: ProviderAddressInput;
   adminNotes?: string;
+  providerTierId?: string | null;
   isActive?: boolean;
   imageBase64?: string;
   imageMimeType?: string;
