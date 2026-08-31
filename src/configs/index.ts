@@ -42,6 +42,14 @@ const envSchema = z.object({
 
 export type Config = z.infer<typeof envSchema>;
 
+// Keys with no `.optional()`/`.default()` — these must resolve to a real value for
+// envSchema.parse() to succeed. Drives ConfigLoader's fast-path (see configLoader.ts):
+// once every one of these is set directly as a Vercel/local env var, cold starts skip
+// the Firebase Remote Config network round trip entirely.
+const REQUIRED_ENV_KEYS = Object.keys(envSchema.shape).filter(
+  (key) => !envSchema.shape[key as keyof typeof envSchema.shape].isOptional(),
+);
+
 let config: any = {
   port: 3000,
   cors: {
@@ -52,7 +60,7 @@ let config: any = {
 };
 
 export const initializeConfig = async () => {
-  await ConfigLoader.init();
+  await ConfigLoader.init(REQUIRED_ENV_KEYS);
 
   // Resolve all keys from the schema using the prefix logic
   const resolvedEnv: any = {};
