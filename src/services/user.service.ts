@@ -267,25 +267,48 @@ export class UserService {
 
   // ─── Provider management (admin) ───────────────────────────────────────────
 
-  private static async computeProviderStats(providerId: string) {
+  // Batched so a provider list never fans out into 3 queries per row — one groupBy per
+  // stat across all requested providerIds, joined back into a per-provider map.
+  private static async computeProviderStatsBatch(
+    providerIds: string[],
+  ): Promise<Map<string, { complaintSuccess: number; overdue: number; walletBalance: number }>> {
+    const stats = new Map<string, { complaintSuccess: number; overdue: number; walletBalance: number }>();
+    if (providerIds.length === 0) return stats;
+    for (const id of providerIds) stats.set(id, { complaintSuccess: 0, overdue: 0, walletBalance: 0 });
+
     const overdueSince = new Date(Date.now() - OVERDUE_THRESHOLD_HOURS * 60 * 60 * 1000);
 
-    const [complaintSuccess, overdue, wallet] = await Promise.all([
-      prisma.complaint.count({
-        where: { providerId, stage: ComplaintStage.COMPLETED, isDeleted: false },
+    const [successGroups, overdueGroups, wallets] = await Promise.all([
+      prisma.complaint.groupBy({
+        by: ['providerId'],
+        where: { providerId: { in: providerIds }, stage: ComplaintStage.COMPLETED, isDeleted: false },
+        _count: { _all: true },
       }),
-      prisma.complaint.count({
+      prisma.complaint.groupBy({
+        by: ['providerId'],
         where: {
-          providerId,
-          isDeleted: false,
-          stage:     { notIn: [ComplaintStage.COMPLETED, ComplaintStage.REJECTED] },
-          createdAt: { lt: overdueSince },
+          providerId: { in: providerIds },
+          isDeleted:  false,
+          stage:      { notIn: [ComplaintStage.COMPLETED, ComplaintStage.REJECTED] },
+          createdAt:  { lt: overdueSince },
         },
+        _count: { _all: true },
       }),
-      prisma.wallet.findUnique({ where: { userId: providerId } }),
+      prisma.wallet.findMany({ where: { userId: { in: providerIds } } }),
     ]);
 
-    return { complaintSuccess, overdue, walletBalance: wallet?.balance ?? 0 };
+    for (const group of successGroups) {
+      if (group.providerId) stats.get(group.providerId)!.complaintSuccess = group._count._all;
+    }
+    for (const group of overdueGroups) {
+      if (group.providerId) stats.get(group.providerId)!.overdue = group._count._all;
+    }
+    for (const wallet of wallets) {
+      const entry = stats.get(wallet.userId);
+      if (entry) entry.walletBalance = wallet.balance;
+    }
+
+    return stats;
   }
 
   static async listProvidersWithStats(search?: string) {
@@ -305,12 +328,12 @@ export class UserService {
       orderBy: { createdAt: 'desc' },
     });
 
-    return Promise.all(
-      providers.map(async (provider) => ({
-        ...flattenProviderDetail(provider),
-        stats: await UserService.computeProviderStats(provider.id),
-      })),
-    );
+    const statsByProvider = await UserService.computeProviderStatsBatch(providers.map((p) => p.id));
+
+    return providers.map((provider) => ({
+      ...flattenProviderDetail(provider),
+      stats: statsByProvider.get(provider.id) ?? EMPTY_STATS,
+    }));
   }
 
   static async getProviderById(providerId: string) {
@@ -320,8 +343,8 @@ export class UserService {
     });
     if (!provider) throw new ApiError(404, 'Provider not found');
 
-    const stats = await UserService.computeProviderStats(provider.id);
-    return { ...flattenProviderDetail(provider), stats };
+    const statsByProvider = await UserService.computeProviderStatsBatch([provider.id]);
+    return { ...flattenProviderDetail(provider), stats: statsByProvider.get(provider.id) ?? EMPTY_STATS };
   }
 
   private static async resolveProviderImage(
@@ -538,7 +561,7 @@ export class UserService {
       await BankService.upsertForUser(providerId, bankAccount, { enforceLock: false });
     }
 
-    const stats = await UserService.computeProviderStats(providerId);
+    const stats = (await UserService.computeProviderStatsBatch([providerId])).get(providerId) ?? EMPTY_STATS;
     const final = bankAccount !== undefined
       ? await prisma.user.findUniqueOrThrow({ where: { id: providerId }, select: PROVIDER_DETAIL_SELECT })
       : updated;

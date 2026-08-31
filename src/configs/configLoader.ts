@@ -10,7 +10,14 @@ export class ConfigLoader {
   private static rawPool: Record<string, string> = {};
   private static activeEnv: ConfigSource = 'local';
 
-  static async init(): Promise<void> {
+  /**
+   * @param requiredKeys Schema keys that must resolve to a real value for the app to run
+   *   (i.e. no zod `.optional()`/`.default()`). If every one of these already resolves from
+   *   local env vars (Vercel-injected, no network call), the Firebase Remote Config fetch is
+   *   skipped entirely — that fetch is a live network round trip on every cold start
+   *   (multiple seconds), so a fully-configured deployment should never pay for it.
+   */
+  static async init(requiredKeys: string[] = []): Promise<void> {
     // 1. Load base .env
     dotenv.config();
 
@@ -30,8 +37,17 @@ export class ConfigLoader {
     // Initialize rawPool from current process.env
     this.rawPool = { ...process.env } as Record<string, string>;
 
-    // 4. Fetch from Firebase Remote Config if not local
+    // 4. Fetch from Firebase Remote Config only if something required is still missing
+    // locally — see the fast-path note above.
     if (nodeEnv === 'development' || nodeEnv === 'production') {
+      const missing = requiredKeys.filter((key) => !this.resolve(key));
+      if (missing.length === 0 && requiredKeys.length > 0) {
+        logger.info('All required config resolved from local env vars — skipping Remote Config fetch.');
+        return;
+      }
+      if (missing.length > 0) {
+        logger.info(`Fetching Remote Config — missing locally: ${missing.join(', ')}`);
+      }
       await this.fetchRemoteConfig();
     }
   }

@@ -204,16 +204,40 @@ model ProviderProfile {
 // (not Strapi — see console CLAUDE.md, tiers are Nexus-native). Label only for
 // now: nothing reads this to change behavior yet.
 model ProviderTier {
-  id          String            @id @default(uuid())
+  id          String                   @id @default(uuid())
   name        String
-  order       Int               @default(0)
-  isActive    Boolean           @default(true)
+  order       Int                      @default(0)
+  isActive    Boolean                  @default(true)
   description String?
   color       String?
-  isDeleted   Boolean           @default(false)
+  isDeleted   Boolean                  @default(false)
   providers   ProviderProfile[]
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
+  tierPricing ServicePartTierPricing[]
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+}
+
+// Per-(service part, provider tier) pricing override — "Group" pricing in watchtower's
+// Pricing > Service Parts table. servicePartId references a Strapi-mirrored service-part's
+// documentId (watchtower's separate DB), so it's a plain string, not a Prisma relation.
+// A part with no row here for a given tier falls back to that part's own base
+// face_value/expense/provider_cut ("Labour") — see watchtower's PartsTab.
+model ServicePartTierPricing {
+  id             String       @id @default(uuid())
+  servicePartId  String
+  providerTierId String
+  providerTier   ProviderTier @relation(fields: [providerTierId], references: [id])
+  salesPrice     Float
+  expense        Float?
+  labour         Float?
+  maxDiscount    Float?
+  isDeleted      Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([servicePartId, providerTierId])
+  @@index([servicePartId])
+  @@index([providerTierId])
 }
 
 // Provider payout bank details. Editing (by the provider or an admin) always
