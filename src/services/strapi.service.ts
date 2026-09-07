@@ -1,6 +1,16 @@
 import { config } from '@/configs';
 import { logger } from '@/utils/logger';
 
+// Despite the name, `STRAPI_URL`/`STRAPI_API_TOKEN` no longer point at the Strapi console
+// app — they point at watchtower's own Strapi-compatible GraphQL (/graphql) and REST
+// (/api/<plural>) endpoints, which serve the same content (device types, subscription
+// plans/addons, service parts, welcome bonus) from watchtower's own DB mirror. Every query
+// below is unchanged from when this hit real Strapi — field names and query/filter shapes
+// were verified byte-for-byte against watchtower's registered content-type schemas
+// (watchtower/content-schemas/**), since watchtower's GraphQL schema is generated to mirror
+// Strapi's own shadowCRUD naming. Kept the class/file name to avoid a repo-wide rename for
+// a purely cosmetic change.
+
 export interface RemoteDeviceType {
   documentId: string;
   key: string;
