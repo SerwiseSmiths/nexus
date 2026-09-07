@@ -18,7 +18,7 @@ export const auth = (req: AuthRequest, res: Response, next: NextFunction) => {
   const token = authHeader && authHeader.split(" ")[1];
 
   if (!token) {
-    return res.status(401).json({ message: "Access Denied: No Token Provided" });
+    return ApiResponse.error(res, 401, "Please log in to continue");
   }
 
   try {
@@ -52,7 +52,7 @@ export const auth = (req: AuthRequest, res: Response, next: NextFunction) => {
 
     return next();
   } catch (err) {
-    return ApiResponse.error(res, 401, "Invalid or Expired Token");
+    return ApiResponse.error(res, 401, "Your session has expired. Please log in again");
   }
 };
 

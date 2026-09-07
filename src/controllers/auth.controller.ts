@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import { AuthService } from "../services/auth.service";
 import { Role } from "@prisma/client";
 import { ApiResponse } from "../utils/apiResponse";
+import { isValidPhoneNo, isValidOtp } from "../utils/validators";
 
 export class AuthController {
   static async requestOtp(req: Request, res: Response, next: NextFunction) {
@@ -9,6 +10,9 @@ export class AuthController {
       const { phoneNo } = req.body;
       if (!phoneNo) {
         return ApiResponse.error(res, 400, "Phone number is required");
+      }
+      if (!isValidPhoneNo(phoneNo)) {
+        return ApiResponse.error(res, 400, "Please enter a valid 10-digit phone number");
       }
 
       await AuthService.generateOtp(phoneNo);
@@ -23,6 +27,12 @@ export class AuthController {
       const { phoneNo, otp, role } = req.body;
       if (!phoneNo || !otp) {
         return ApiResponse.error(res, 400, "Phone number and OTP are required");
+      }
+      if (!isValidPhoneNo(phoneNo)) {
+        return ApiResponse.error(res, 400, "Please enter a valid 10-digit phone number");
+      }
+      if (!isValidOtp(otp)) {
+        return ApiResponse.error(res, 400, "Please enter a valid 6-digit OTP");
       }
 
       const result = await AuthService.verifyOtp(phoneNo, otp, role as Role);
@@ -66,6 +76,9 @@ export class AuthController {
       if (!phoneNo) {
         return ApiResponse.error(res, 400, "Phone number is required");
       }
+      if (!isValidPhoneNo(phoneNo)) {
+        return ApiResponse.error(res, 400, "Please enter a valid 10-digit phone number");
+      }
 
       await AuthService.providerRequestOtp(phoneNo);
       return ApiResponse.success(res, 200, "OTP sent successfully");
@@ -79,6 +92,12 @@ export class AuthController {
       const { phoneNo, otp } = req.body;
       if (!phoneNo || !otp) {
         return ApiResponse.error(res, 400, "Phone number and OTP are required");
+      }
+      if (!isValidPhoneNo(phoneNo)) {
+        return ApiResponse.error(res, 400, "Please enter a valid 10-digit phone number");
+      }
+      if (!isValidOtp(otp)) {
+        return ApiResponse.error(res, 400, "Please enter a valid 6-digit OTP");
       }
 
       const result = await AuthService.providerVerifyOtp(phoneNo, otp);

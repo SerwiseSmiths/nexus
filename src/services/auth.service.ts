@@ -70,16 +70,16 @@ export class AuthService {
     const record = await prisma.otp.findUnique({ where: { phoneNo } });
 
     if (!record) {
-      throw new Error("OTP not found or expired");
+      throw new ApiError(400, "OTP not found or expired");
     }
 
     if (record.expiresAt < new Date()) {
       await prisma.otp.delete({ where: { phoneNo } });
-      throw new Error("OTP expired");
+      throw new ApiError(400, "OTP expired");
     }
 
     if (record.attempts >= OTP_MAX_ATTEMPTS) {
-      throw new Error("Maximum OTP attempts exceeded");
+      throw new ApiError(429, "Maximum OTP attempts exceeded");
     }
 
     const isMatch = (phoneNo in TEST_PHONES && otp === TEST_PHONES[phoneNo]) ||
@@ -90,7 +90,7 @@ export class AuthService {
         where: { phoneNo },
         data: { attempts: { increment: 1 } },
       });
-      throw new Error("Invalid OTP");
+      throw new ApiError(400, "Invalid OTP");
     }
 
     // OTP verified, delete it
@@ -183,7 +183,11 @@ export class AuthService {
   }
 
   static async refreshAccessToken(oldRefreshToken: string) {
-    jwt.verify(oldRefreshToken, config.jwt.secret as jwt.Secret);
+    try {
+      jwt.verify(oldRefreshToken, config.jwt.secret as jwt.Secret);
+    } catch (err) {
+      throw new ApiError(401, "Your session has expired. Please log in again");
+    }
 
     const dbToken = await prisma.refreshToken.findUnique({
       where: { token: oldRefreshToken },
@@ -192,7 +196,7 @@ export class AuthService {
 
     if (!dbToken || dbToken.expiresAt < new Date()) {
       if (dbToken) await prisma.refreshToken.delete({ where: { id: dbToken.id } });
-      throw new Error("Invalid or expired refresh token");
+      throw new ApiError(401, "Your session has expired. Please log in again");
     }
 
     const user = dbToken.user;
