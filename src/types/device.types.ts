@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { Role } from '@prisma/client';
 
 // ---------------------------------------------------------------------------
 // Device Keys
@@ -14,6 +15,21 @@ export const DEVICE_KEYS = {
 } as const;
 
 export type DeviceKey = (typeof DEVICE_KEYS)[keyof typeof DEVICE_KEYS];
+
+// Accepts a full ISO date ("YYYY-MM-DD") or a month-precision value ("YYYY-MM",
+// from radix's month/year picker) and rejects anything that isn't actually a
+// parseable date — previously an unparseable string was accepted here and
+// silently defaulted to "now" at the point of use (device.service.ts), masking
+// bad input from the client instead of rejecting it with a 400.
+const purchaseDateSchema = z
+  .string()
+  .min(1, 'Purchase date is required')
+  .refine((value) => {
+    const trimmed = value.trim();
+    if (!/^\d{4}-\d{2}(-\d{2})?$/.test(trimmed)) return false;
+    const normalized = /^\d{4}-\d{2}$/.test(trimmed) ? `${trimmed}-01` : trimmed;
+    return !isNaN(new Date(normalized).getTime());
+  }, 'Purchase date must be a valid date (YYYY-MM-DD or YYYY-MM)');
 
 // ---------------------------------------------------------------------------
 // Master Purifier (RO) metadata schema
@@ -42,7 +58,7 @@ const AdditionalTechnologySchema = z.object({
 export const MasterPurifierMetaSchema = z.object({
   company:              z.string().min(1, 'Company is required'),
   waterTankCapacity:    z.number().positive('Water tank capacity must be positive'),
-  purchaseDate:         z.string().min(1, 'Purchase date is required'),
+  purchaseDate:         purchaseDateSchema,
   basicTechnology:      BasicTechnologySchema,
   additionalTechnology: AdditionalTechnologySchema,
 });
@@ -60,7 +76,7 @@ export const AirConditionerMetaSchema = z.object({
   coolingCapacityWatt:            z.number().min(0).optional(),
   gasType:                        z.enum(['R_22', 'R_32', 'R_410A']),
   distanceIndoorOutdoorFt:        z.number().min(0),
-  purchaseDate:                   z.string().min(1, 'Purchase date is required'),
+  purchaseDate:                   purchaseDateSchema,
   starRating:                     z.number().min(0).max(5).optional(),
   starRatingImageUrl:             z.string().url().optional(),
   notes:                          z.string().optional(),
@@ -78,7 +94,7 @@ export const FridgeMetaSchema = z.object({
   numberOfDoors:    z.number().int().min(0),
   freezerPosition:  z.enum(['TOP_FREEZER', 'BOTTOM_FREEZER', 'SIDE_BY_SIDE']),
   gasType:          z.enum(['R_600', 'R_134A', 'R_290']),
-  purchaseDate:     z.string().min(1, 'Purchase date is required'),
+  purchaseDate:     purchaseDateSchema,
   starRating:       z.number().min(0).max(5).optional(),
   starRatingImageUrl: z.string().url().optional(),
   notes:            z.string().optional(),
@@ -95,7 +111,7 @@ export const WashingMachineMetaSchema = z.object({
   automation:         z.enum(['SEMI_AUTOMATIC', 'FULLY_AUTOMATIC']),
   storageCapacityKg:  z.number().min(0),
   dryingCapability:   z.enum(['NONE', 'HEAT_DRY']),
-  purchaseDate:       z.string().min(1, 'Purchase date is required'),
+  purchaseDate:       purchaseDateSchema,
   starRating:         z.number().min(0).max(5).optional(),
   starRatingImageUrl: z.string().url().optional(),
   notes:              z.string().optional(),
@@ -110,7 +126,7 @@ export const GeyserMetaSchema = z.object({
   company:            z.string().min(1, 'Company is required'),
   heatingType:        z.enum(['GAS', 'ELECTRIC']),
   capacityLtr:        z.number().min(0),
-  purchaseDate:       z.string().min(1, 'Purchase date is required'),
+  purchaseDate:       purchaseDateSchema,
   starRating:         z.number().min(0).max(5).optional(),
   starRatingImageUrl: z.string().url().optional(),
   notes:              z.string().optional(),
@@ -187,17 +203,20 @@ export interface AddDeviceForCustomerBody {
 }
 
 export interface AddDeviceForCustomerInput {
-  targetUserId: string;
-  providerId:   string;
-  deviceKey:    DeviceKey;
-  addressId?:   string;
-  imageUrl?:    string;
-  metadata:     Record<string, unknown>;
+  targetUserId:  string;
+  providerId:    string;
+  requesterRole: Role;
+  deviceKey:     DeviceKey;
+  addressId?:    string;
+  imageUrl?:     string;
+  metadata:      Record<string, unknown>;
 }
 
 // Provider-facing: list a customer's devices
 export interface ListCustomerDevicesInput {
-  targetUserId: string;
-  addressId?:   string;
-  deviceKey?:   string;
+  targetUserId:  string;
+  requesterId:   string;
+  requesterRole: Role;
+  addressId?:    string;
+  deviceKey?:    string;
 }

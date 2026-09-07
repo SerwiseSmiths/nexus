@@ -6,7 +6,9 @@ import { Express } from 'express';
 // for any request to reach the auth routes/middleware at all.
 export function testRequest(app: Express) {
   return {
-    post: (url: string) => request(app).post(url).set('x-app-id', 'serwise-app'),
-    get: (url: string) => request(app).get(url).set('x-app-id', 'serwise-app'),
+    post:   (url: string) => request(app).post(url).set('x-app-id', 'serwise-app'),
+    get:    (url: string) => request(app).get(url).set('x-app-id', 'serwise-app'),
+    patch:  (url: string) => request(app).patch(url).set('x-app-id', 'serwise-app'),
+    delete: (url: string) => request(app).delete(url).set('x-app-id', 'serwise-app'),
   };
 }

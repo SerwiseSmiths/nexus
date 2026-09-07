@@ -1,4 +1,5 @@
-import { DeviceType, WorkHistoryEvent, Prisma } from '@prisma/client';
+import { DeviceType, WorkHistoryEvent, Prisma, Role } from '@prisma/client';
+import type { ZodError } from 'zod';
 import prisma from '@/services/prisma.service';
 import { ApiError } from '@/utils/apiResponse';
 import { logger } from '@/utils/logger';
@@ -32,13 +33,45 @@ function parsePurchaseDate(value: string): Date {
   return isNaN(parsed.getTime()) ? new Date() : parsed;
 }
 
+// Turns the first Zod validation failure into a plain-language message (e.g.
+// "company: Company is required") instead of surfacing a raw issue array as
+// the primary error — the full list is still attached as the error's `data`
+// for callers that want field-level detail.
+function describeZodError(error: ZodError): string {
+  const first = error.issues[0];
+  if (!first) return 'Invalid device metadata';
+  const field = first.path.join('.');
+  return field ? `${field}: ${first.message}` : first.message;
+}
+
 export class DeviceService {
+  // A PROVIDER may only touch a customer's devices if they've actually been
+  // assigned to serve that customer (i.e. there's a complaint linking them) —
+  // otherwise any authenticated provider could read or add devices for any
+  // customer just by knowing/guessing a userId. ADMIN bypasses this by design.
+  private static async assertProviderCanAccessCustomer(
+    requesterId: string,
+    requesterRole: Role,
+    targetUserId: string,
+  ) {
+    if (requesterRole === Role.ADMIN) return;
+
+    const relationship = await prisma.complaint.findFirst({
+      where: { providerId: requesterId, userId: targetUserId, isDeleted: false },
+      select: { id: true },
+    });
+
+    if (!relationship) {
+      throw new ApiError(403, 'You are not assigned to this customer');
+    }
+  }
+
   static async addDevice({ userId, addressId, deviceKey, imageUrl, metadata }: AddDeviceInput) {
     const validator = DEVICE_META_VALIDATORS[deviceKey];
     if (!validator) throw new ApiError(400, `Unknown device key: ${deviceKey}`);
 
     const result = validator.safeParse(metadata);
-    if (!result.success) throw new ApiError(400, 'Invalid device metadata', result.error.issues);
+    if (!result.success) throw new ApiError(400, describeZodError(result.error), result.error.issues);
 
     const device = await prisma.device.create({
       data: {
@@ -102,7 +135,7 @@ export class DeviceService {
       if (!validator) throw new ApiError(400, `Unknown device key: ${device.deviceKey}`);
 
       const result = validator.safeParse(metadata);
-      if (!result.success) throw new ApiError(400, 'Invalid device metadata', result.error.issues);
+      if (!result.success) throw new ApiError(400, describeZodError(result.error), result.error.issues);
       validatedMeta = result.data as Record<string, unknown>;
     }
 
@@ -162,7 +195,15 @@ export class DeviceService {
     });
   }
 
-  static async getDevicesByUserId({ targetUserId, addressId, deviceKey }: ListCustomerDevicesInput) {
+  static async getDevicesByUserId({
+    targetUserId,
+    requesterId,
+    requesterRole,
+    addressId,
+    deviceKey,
+  }: ListCustomerDevicesInput) {
+    await DeviceService.assertProviderCanAccessCustomer(requesterId, requesterRole, targetUserId);
+
     return prisma.device.findMany({
       where: {
         userId:    targetUserId,
@@ -185,16 +226,20 @@ export class DeviceService {
 
   static async addDeviceForCustomer({
     targetUserId,
+    providerId,
+    requesterRole,
     deviceKey,
     addressId,
     imageUrl,
     metadata,
   }: AddDeviceForCustomerInput) {
+    await DeviceService.assertProviderCanAccessCustomer(providerId, requesterRole, targetUserId);
+
     const validator = DEVICE_META_VALIDATORS[deviceKey];
     if (!validator) throw new ApiError(400, `Unknown device key: ${deviceKey}`);
 
     const result = validator.safeParse(metadata);
-    if (!result.success) throw new ApiError(400, 'Invalid device metadata', result.error.issues);
+    if (!result.success) throw new ApiError(400, describeZodError(result.error), result.error.issues);
 
     const device = await prisma.device.create({
       data: {

@@ -4,6 +4,11 @@ Living reference for the phone/OTP authentication system shared by **serwise** (
 
 Last verified against the codebase: 2026-09-07.
 
+**Companion docs** — each app's client-side auth implementation has its own reference in the same spirit:
+- `serwise/docs/authentication.md` — consumer app (phone/OTP, no gaps beyond client hardening)
+- `radix/docs/authentication.md` — provider app (phone/OTP, plus a new logout screen added 2026-09-07)
+- `watchtower/docs/authentication.md` — admin panel, **entirely separate auth systems**, does not use this module's endpoints at all, and carries real unaddressed security gaps (see its §7)
+
 ---
 
 ## 1. Scope & Design
@@ -221,6 +226,28 @@ jest.config.js, .env.test             — test configuration
 
 ---
 
-## 11. Change Log
+## 11. Client-Side Integration (serwise / radix / watchtower)
 
-- **2026-09-07** — Initial hardening pass: fixed raw `Error` → `ApiError` (was causing wrong 500s), fixed middleware response shape, added phone/OTP format validation, reworded 4 robotic error messages to be user-friendly (confirmed safe — frontend apps branch on status code only), built full test suite (55 tests) + test DB infra, wrote this doc.
+Audited 2026-09-07 for the specific bug class of "backend says failure but the client acts like it succeeded" (checking `res.ok`/2xx without checking the body's `success`/`statusCode`, swallowed errors, silent catch blocks). **No instance of that exact bug was found in any of the three apps** — all three correctly gate UI state changes behind a real `success: true`. But related bugs were found and fixed in the same family (a failure being mishandled, just not as literal false-success):
+
+| App | Finding | Status |
+|---|---|---|
+| serwise | `attemptTokenRefresh` (`src/services/api.ts`) collapsed every refresh failure — real 401, network error, backend 5xx — into one unconditional force-logout | **Fixed**: only a genuine 401 now clears auth; network/5xx/malformed-JSON failures surface a retryable error and leave the session intact |
+| serwise | `res.json()` called with no guard — a non-JSON error body (proxy/gateway HTML page) crashed as a raw `SyntaxError` | **Fixed**: shared `parseJsonResponse` helper turns this into a clean `ApiError` |
+| radix | OTP-resend failures were tracked internally by the mutation hook but never rendered — a failed resend showed nothing | **Fixed**: `OtpScreen.tsx` now also reads `requestOtpMutation.error` |
+| radix | `/api/auth/logout` was never called from the client at all — **and radix had no logout screen/button anywhere in the app** | **Fixed**: added `logout()` in `auth.api.ts` and a new `SettingsScreen` (reachable by tapping the avatar on `HomeScreen`) that calls it before clearing local auth state, mirroring serwise's `SettingsScreen` pattern |
+| watchtower | N/A — doesn't use nexus's `/api/auth/*` at all; has two separate self-contained login systems (root OTP+passkey, admin email/password) | Audited clean, no changes made |
+
+**Where the client-side auth code actually lives**, for the next person extending this:
+- serwise: `src/services/api.ts` (client + refresh interceptor), `src/services/auth.api.ts`, `src/screens/root-stack/PhoneScreen/`, `src/screens/root-stack/SettingsScreen/` (logout)
+- radix: `src/services/api.ts`, `src/services/auth.api.ts`, `src/screens/LoginScreen/`, `src/screens/OtpScreen/`, `src/screens/SettingsScreen/` (new, logout)
+- watchtower: entirely separate — `src/app/root/` (OTP+passkey) and `src/app/admin/` (email/password), neither touches nexus auth; nexus is only called for data via `src/lib/nexus/client.ts`
+
+**Known residual gap, deliberately not addressed (small, flag if it resurfaces):** serwise's `PhoneScreen`/main `apiRequest` path still has no network-error guard around the *first* fetch call (only the refresh path was fixed) — a dropped connection on an ordinary API call throws unhandled rather than as a clean `ApiError`. Not touched in this pass since it wasn't part of the original audit's scope; worth a look if raw fetch exceptions ever show up in crash reporting.
+
+---
+
+## 12. Change Log
+
+- **2026-09-07** — Backend hardening: fixed raw `Error` → `ApiError` (was causing wrong 500s), fixed middleware response shape, added phone/OTP format validation, reworded 4 robotic error messages to be user-friendly (confirmed safe — frontend apps branch on status code only), built full test suite (55 tests) + test DB infra, wrote this doc.
+- **2026-09-07** — Client-side audit + fixes across serwise/radix/watchtower (see §11): serwise refresh-failure over-broad logout + unguarded JSON parse fixed; radix resend-error surfacing fixed and a logout screen added (didn't exist before at all).

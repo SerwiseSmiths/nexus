@@ -108,7 +108,13 @@ export class DeviceController {
       const targetUserId = req.params.userId as string;
       const addressId    = req.query.addressId as string | undefined;
       const deviceKey    = req.query.deviceKey as string | undefined;
-      const devices = await DeviceService.getDevicesByUserId({ targetUserId, addressId, deviceKey });
+      const devices = await DeviceService.getDevicesByUserId({
+        targetUserId,
+        addressId,
+        deviceKey,
+        requesterId:   req.user!.id,
+        requesterRole: req.user!.role,
+      });
       return ApiResponse.success(res, 200, 'Customer devices fetched successfully', { devices });
     } catch (error) {
       next(error);
@@ -124,8 +130,9 @@ export class DeviceController {
 
       const device = await DeviceService.addDeviceForCustomer({
         targetUserId,
-        providerId: req.user!.id,
-        deviceKey:  deviceKey as DeviceKey,
+        providerId:    req.user!.id,
+        requesterRole: req.user!.role,
+        deviceKey:     deviceKey as DeviceKey,
         addressId,
         imageUrl,
         metadata,
