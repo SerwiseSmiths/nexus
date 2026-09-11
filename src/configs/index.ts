@@ -22,6 +22,11 @@ const envSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   STRAPI_URL: z.string().url().default('http://localhost:1337'),
   STRAPI_API_TOKEN: z.string().optional(),
+  // TTL for the in-memory cache in front of watchtower's CMS reads (strapi.service.ts) —
+  // a backstop so cached content self-heals even if an invalidation call from watchtower
+  // is ever missed. Explicit invalidation (POST /cache/invalidate, see cache.route.ts)
+  // clears entries immediately on write, well before this expires.
+  CACHE_TTL_SECONDS: z.string().transform(Number).default(300),
   RAZORPAY_KEY_ID: z.string().optional(),
   RAZORPAY_KEY_SECRET: z.string().optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
@@ -109,6 +114,9 @@ export const initializeConfig = async () => {
     },
     strapiUrl: parsed.STRAPI_URL,
     strapiApiToken: parsed.STRAPI_API_TOKEN,
+    cache: {
+      ttlSeconds: parsed.CACHE_TTL_SECONDS,
+    },
     razorpay: {
       keyId:         parsed.RAZORPAY_KEY_ID,
       keySecret:     parsed.RAZORPAY_KEY_SECRET,
@@ -153,6 +161,7 @@ export const startConfigPolling = (): void => {
         olaMapsApiKey: parsed.OLA_MAPS_API_KEY,
         strapiUrl:   parsed.STRAPI_URL,
         strapiApiToken: parsed.STRAPI_API_TOKEN,
+        cache:       { ttlSeconds: parsed.CACHE_TTL_SECONDS },
         appUrl:      parsed.APP_URL,
       });
 

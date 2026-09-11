@@ -1,5 +1,7 @@
 import { config } from '@/configs';
 import { logger } from '@/utils/logger';
+import { CacheService } from '@/services/cache.service';
+import { CACHE_TAGS } from '@/constants/cache-tags';
 
 // Despite the name, `STRAPI_URL`/`STRAPI_API_TOKEN` no longer point at the Strapi console
 // app — they point at watchtower's own Strapi-compatible GraphQL (/graphql) and REST
@@ -85,7 +87,7 @@ export class StrapiService {
     return json.data;
   }
 
-  static async fetchParts(deviceType?: string): Promise<ServicePart[]> {
+  private static async fetchAllPartsUncached(): Promise<ServicePart[]> {
     const qs = new URLSearchParams({
       'pagination[pageSize]': '200',
       'filters[visibility][$eq]': 'ACTIVE',
@@ -110,18 +112,35 @@ export class StrapiService {
     }
 
     const json = (await res.json()) as { data: Record<string, unknown>[] };
-    let parts = json.data.map((item) => item as unknown as ServicePart);
+    return json.data.map((item) => item as unknown as ServicePart);
+  }
 
-    if (deviceType) {
-      parts = parts.filter(
-        (p) => !p.device_types?.length || p.device_types.some((dt) => dt.key === deviceType),
-      );
-    }
+  static async fetchParts(deviceType?: string): Promise<ServicePart[]> {
+    // Cached unfiltered — deviceType filtering happens client-side below so every
+    // caller shares one cache entry regardless of which deviceType it asked for.
+    const parts = await CacheService.getOrSet(
+      'strapi:parts:all',
+      config.cache.ttlSeconds,
+      [CACHE_TAGS.SERVICE_PARTS],
+      () => this.fetchAllPartsUncached(),
+    );
 
-    return parts;
+    if (!deviceType) return parts;
+    return parts.filter(
+      (p) => !p.device_types?.length || p.device_types.some((dt) => dt.key === deviceType),
+    );
   }
 
   static async fetchDeviceTypes(): Promise<RemoteDeviceType[]> {
+    return CacheService.getOrSet(
+      'strapi:deviceTypes',
+      config.cache.ttlSeconds,
+      [CACHE_TAGS.DEVICE_TYPES],
+      () => this.fetchDeviceTypesUncached(),
+    );
+  }
+
+  private static async fetchDeviceTypesUncached(): Promise<RemoteDeviceType[]> {
     const query = `
       query GetDeviceTypes {
         deviceTypes(pagination: { pageSize: 50 }) {
@@ -145,6 +164,15 @@ export class StrapiService {
   }
 
   static async fetchSubscriptionPlans(): Promise<import('@/types/subscription.types').CmsSubscriptionPlan[]> {
+    return CacheService.getOrSet(
+      'strapi:subscriptionPlans',
+      config.cache.ttlSeconds,
+      [CACHE_TAGS.SUBSCRIPTION_PLANS],
+      () => this.fetchSubscriptionPlansUncached(),
+    );
+  }
+
+  private static async fetchSubscriptionPlansUncached(): Promise<import('@/types/subscription.types').CmsSubscriptionPlan[]> {
     const query = `
       query GetSubscriptionPlans {
         subscriptionPlans(
@@ -183,6 +211,22 @@ export class StrapiService {
   }
 
   static async fetchSubscriptionAddons(deviceTypeKey?: string): Promise<import('@/types/subscription.types').CmsSubscriptionAddon[]> {
+    // Cached unfiltered — deviceTypeKey filtering happens client-side below so every
+    // caller shares one cache entry regardless of which deviceTypeKey it asked for.
+    const addons = await CacheService.getOrSet(
+      'strapi:subscriptionAddons:all',
+      config.cache.ttlSeconds,
+      [CACHE_TAGS.SUBSCRIPTION_ADDONS],
+      () => this.fetchSubscriptionAddonsUncached(),
+    );
+
+    if (!deviceTypeKey) return addons;
+    return addons.filter(
+      (a) => !a.device_types?.length || a.device_types.some((dt) => dt.key === deviceTypeKey),
+    );
+  }
+
+  private static async fetchSubscriptionAddonsUncached(): Promise<import('@/types/subscription.types').CmsSubscriptionAddon[]> {
     const query = `
       query GetSubscriptionAddons {
         subscriptionAddons(
@@ -209,7 +253,7 @@ export class StrapiService {
       >;
     }>(query);
 
-    let addons = (data.subscriptionAddons ?? []).map((item) => {
+    return (data.subscriptionAddons ?? []).map((item) => {
       const rawUrl = item.image?.url;
       const imageUrl = rawUrl
         ? rawUrl.startsWith('http') ? rawUrl : `${this.baseUrl}${rawUrl}`
@@ -217,17 +261,23 @@ export class StrapiService {
       const { image: _image, ...rest } = item;
       return { ...rest, imageUrl } as import('@/types/subscription.types').CmsSubscriptionAddon;
     });
-
-    if (deviceTypeKey) {
-      addons = addons.filter(
-        (a) => !a.device_types?.length || a.device_types.some((dt) => dt.key === deviceTypeKey),
-      );
-    }
-
-    return addons;
   }
 
   static async fetchWelcomeBonus(): Promise<{ isEnabled: boolean; amount: number } | null> {
+    try {
+      return await CacheService.getOrSet(
+        'strapi:welcomeBonus',
+        config.cache.ttlSeconds,
+        [CACHE_TAGS.WELCOME_BONUS],
+        () => this.fetchWelcomeBonusUncached(),
+      );
+    } catch (err) {
+      logger.warn('[Strapi] fetchWelcomeBonus failed:', err);
+      return null;
+    }
+  }
+
+  private static async fetchWelcomeBonusUncached(): Promise<{ isEnabled: boolean; amount: number } | null> {
     const query = `
       query GetWelcomeBonus {
         welcomeBonus {
@@ -237,16 +287,23 @@ export class StrapiService {
       }
     `;
 
-    try {
-      const data = await this.gql<{ welcomeBonus: { isEnabled: boolean; amount: number } | null }>(query);
-      return data.welcomeBonus ?? null;
-    } catch (err) {
-      logger.warn('[Strapi] fetchWelcomeBonus failed:', err);
-      return null;
-    }
+    const data = await this.gql<{ welcomeBonus: { isEnabled: boolean; amount: number } | null }>(query);
+    return data.welcomeBonus ?? null;
   }
 
   static async fetchPartByDocumentId(documentId: string): Promise<ServicePart | null> {
+    // Not routed through CacheService.getOrSet — a transient not-found (or a request that
+    // races a not-yet-invalidated cache) must never freeze a `null` result for a full TTL.
+    const key = `strapi:parts:byId:${documentId}`;
+    const cached = CacheService.get<ServicePart>(key);
+    if (cached !== undefined) return cached;
+
+    const part = await this.fetchPartByDocumentIdUncached(documentId);
+    if (part) CacheService.set(key, part, config.cache.ttlSeconds, [CACHE_TAGS.SERVICE_PARTS]);
+    return part;
+  }
+
+  private static async fetchPartByDocumentIdUncached(documentId: string): Promise<ServicePart | null> {
     const qs = new URLSearchParams({
       status: 'published',
       'populate[device_types][fields][0]': 'key',
