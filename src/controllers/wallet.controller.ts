@@ -49,6 +49,21 @@ export class WalletController {
     }
   }
 
+  static async getUserWalletHistory(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = req.params.userId as string;
+      if (!userId) throw new ApiError(400, 'userId is required');
+
+      const page  = Math.max(1, parseInt(req.query.page  as string) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+
+      const result = await WalletService.getWalletHistory({ userId, page, limit });
+      ApiResponse.success(res, 200, 'Wallet history fetched successfully', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async credit(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
       const parsed = creditDebitSchema.safeParse(req.body);
