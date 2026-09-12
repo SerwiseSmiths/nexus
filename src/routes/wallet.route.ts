@@ -168,6 +168,35 @@ router.get('/user/:userId', authenticate, authorize([Role.ADMIN]), WalletControl
 
 /**
  * @swagger
+ * /wallet/user/{userId}/history:
+ *   get:
+ *     summary: Get paginated ledger history for a specific user (Admin only)
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 20 }
+ *     responses:
+ *       200:
+ *         description: Wallet history fetched successfully
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
+ */
+router.get('/user/:userId/history', authenticate, authorize([Role.ADMIN]), WalletController.getUserWalletHistory);
+
+/**
+ * @swagger
  * /wallet/credit:
  *   post:
  *     summary: Credit a user's wallet (Admin only)
