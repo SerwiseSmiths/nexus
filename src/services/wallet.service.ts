@@ -122,6 +122,47 @@ export class WalletService {
     return prisma.$transaction((t) => WalletService.creditWalletTx(t, input));
   }
 
+  // Sanctioned entry point for charging a customer's wallet on complaint
+  // completion (method: 'WALLET'). Always enforces a real balance check —
+  // unlike debitWallet's ORDER_PAYMENT carve-out (used elsewhere for
+  // audit-only entries with updateBalance:false), this debit actually moves
+  // money, so an insufficient balance must reject the whole operation.
+  // Requires the caller's own transaction client so the debit, the complaint's
+  // stage update, and the provider's credit all commit or roll back together —
+  // a customer must never be charged without the provider being paid, or vice
+  // versa.
+  static async debitCustomerForComplaintPayment(
+    userId: string,
+    amount: number,
+    complaintId: string,
+    tx: TxClient,
+  ) {
+    if (amount <= 0) return;
+
+    const wallet = await tx.wallet.findUnique({ where: { userId } });
+    if (!wallet) throw new ApiError(400, 'Customer wallet not found');
+    if (!wallet.isActive) throw new ApiError(403, 'Customer wallet is inactive');
+    if (wallet.balance < amount) throw new ApiError(400, 'Insufficient wallet balance to complete this payment');
+
+    const openingBalance = wallet.balance;
+    const closingBalance = openingBalance - amount;
+
+    await tx.wallet.update({ where: { id: wallet.id }, data: { balance: closingBalance } });
+    await tx.walletLedger.create({
+      data: {
+        walletId: wallet.id,
+        userId,
+        type: WalletLedgerType.DEBIT,
+        source: WalletLedgerSource.ORDER_PAYMENT,
+        amount,
+        openingBalance,
+        closingBalance,
+        updateBalance: true,
+        refId: complaintId,
+      },
+    });
+  }
+
   static async debitWallet(input: DebitWalletInput) {
     const {
       userId,

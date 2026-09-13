@@ -1,11 +1,11 @@
-import { DeviceType, WorkHistoryEvent, Prisma, Role } from '@prisma/client';
-import type { ZodError } from 'zod';
+import { WorkHistoryEvent, Prisma, Role } from '@prisma/client';
 import prisma from '@/services/prisma.service';
 import { ApiError } from '@/utils/apiResponse';
 import { logger } from '@/utils/logger';
+import { describeZodError } from '@/utils/zodError';
 import {
-  DEVICE_KEYS,
   DEVICE_META_VALIDATORS,
+  DEVICE_KEY_TO_TYPE,
   type DeviceKey,
   type AddDeviceInput,
   type UpdateDeviceInput,
@@ -13,14 +13,6 @@ import {
   type AddDeviceForCustomerInput,
   type ListCustomerDevicesInput,
 } from '@/types/device.types';
-
-const DEVICE_KEY_TO_TYPE: Record<DeviceKey, DeviceType> = {
-  [DEVICE_KEYS.MASTER_PURIFIER]: DeviceType.MASTER_PURIFIER,
-  [DEVICE_KEYS.AIR_CONDITIONER]: DeviceType.AIR_CONDITIONER,
-  [DEVICE_KEYS.FRIDGE]:          DeviceType.FRIDGE,
-  [DEVICE_KEYS.WASHING_MACHINE]: DeviceType.WASHING_MACHINE,
-  [DEVICE_KEYS.GEYSER]:          DeviceType.GEYSER,
-};
 
 const VALID_EVENTS = new Set(Object.values(WorkHistoryEvent));
 
@@ -31,17 +23,6 @@ function parsePurchaseDate(value: string): Date {
   const normalized = /^\d{4}-\d{2}$/.test(trimmed) ? `${trimmed}-01` : trimmed;
   const parsed = new Date(normalized);
   return isNaN(parsed.getTime()) ? new Date() : parsed;
-}
-
-// Turns the first Zod validation failure into a plain-language message (e.g.
-// "company: Company is required") instead of surfacing a raw issue array as
-// the primary error — the full list is still attached as the error's `data`
-// for callers that want field-level detail.
-function describeZodError(error: ZodError): string {
-  const first = error.issues[0];
-  if (!first) return 'Invalid device metadata';
-  const field = first.path.join('.');
-  return field ? `${field}: ${first.message}` : first.message;
 }
 
 export class DeviceService {

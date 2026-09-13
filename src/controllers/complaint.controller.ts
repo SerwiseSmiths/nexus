@@ -3,6 +3,7 @@ import { Role } from '@prisma/client';
 import { AuthRequest } from '@/middlewares/auth.middleware';
 import { ComplaintService } from '@/services/complaint.service';
 import { ApiResponse } from '@/utils/apiResponse';
+import { describeZodError } from '@/utils/zodError';
 import {
   CreateComplaintSchema,
   UpdateStageSchema,
@@ -21,7 +22,7 @@ export class ComplaintController {
   static async createComplaint(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const parsed = CreateComplaintSchema.safeParse(req.body);
-      if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
+      if (!parsed.success) return ApiResponse.error(res, 400, describeZodError(parsed.error), parsed.error.issues);
 
       const isAdmin = req.user!.role === Role.ADMIN;
       if (isAdmin && !parsed.data.customerId) {
@@ -94,11 +95,12 @@ export class ComplaintController {
   static async updateStage(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const parsed = UpdateStageSchema.safeParse(req.body);
-      if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
+      if (!parsed.success) return ApiResponse.error(res, 400, describeZodError(parsed.error), parsed.error.issues);
 
       const complaint = await ComplaintService.updateStage({
-        complaintId: req.params.id as string,
-        updatedById: req.user!.id,
+        complaintId:   req.params.id as string,
+        updatedById:   req.user!.id,
+        requesterRole: req.user!.role,
         ...parsed.data,
       });
 
@@ -113,7 +115,7 @@ export class ComplaintController {
   static async assignProvider(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const parsed = AssignProviderSchema.safeParse(req.body);
-      if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
+      if (!parsed.success) return ApiResponse.error(res, 400, describeZodError(parsed.error), parsed.error.issues);
 
       const complaint = await ComplaintService.assignProvider({
         complaintId: req.params.id as string,
@@ -149,7 +151,7 @@ export class ComplaintController {
   static async addQuote(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const parsed = AddQuoteSchema.safeParse(req.body);
-      if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
+      if (!parsed.success) return ApiResponse.error(res, 400, describeZodError(parsed.error), parsed.error.issues);
 
       const result = await ComplaintService.addQuote({
         complaintId: req.params.id as string,
@@ -166,7 +168,7 @@ export class ComplaintController {
   static async respondToQuote(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const parsed = RespondToQuoteSchema.safeParse(req.body);
-      if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
+      if (!parsed.success) return ApiResponse.error(res, 400, describeZodError(parsed.error), parsed.error.issues);
 
       const complaint = await ComplaintService.respondToQuote({
         complaintId: req.params.id as string,
@@ -186,7 +188,7 @@ export class ComplaintController {
   static async linkDevice(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const parsed = LinkDeviceSchema.safeParse(req.body);
-      if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
+      if (!parsed.success) return ApiResponse.error(res, 400, describeZodError(parsed.error), parsed.error.issues);
 
       const complaint = await ComplaintService.linkDevice({
         complaintId:   req.params.id as string,
@@ -201,10 +203,19 @@ export class ComplaintController {
     }
   }
 
+  static async completeService(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const complaint = await ComplaintService.completeService(req.params.id as string, req.user!.id);
+      return ApiResponse.success(res, 200, 'Repair marked as completed', { complaint });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async completePayment(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const parsed = CompletePaymentSchema.safeParse(req.body);
-      if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
+      if (!parsed.success) return ApiResponse.error(res, 400, describeZodError(parsed.error), parsed.error.issues);
 
       const complaint = await ComplaintService.completePayment({
         complaintId: req.params.id as string,
@@ -232,7 +243,7 @@ export class ComplaintController {
   static async validateEntryQr(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const parsed = ValidateQrSchema.safeParse(req.body);
-      if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
+      if (!parsed.success) return ApiResponse.error(res, 400, describeZodError(parsed.error), parsed.error.issues);
 
       const complaint = await ComplaintService.validateEntryQr({
         complaintId: req.params.id as string,
@@ -260,7 +271,7 @@ export class ComplaintController {
   static async reopenComplaint(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const parsed = ReopenComplaintSchema.safeParse(req.body);
-      if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
+      if (!parsed.success) return ApiResponse.error(res, 400, describeZodError(parsed.error), parsed.error.issues);
 
       const complaint = await ComplaintService.reopenComplaint({
         complaintId: req.params.id as string,

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Role } from '@prisma/client';
+import { DeviceType, type Role } from '@prisma/client';
 
 // ---------------------------------------------------------------------------
 // Device Keys
@@ -15,6 +15,17 @@ export const DEVICE_KEYS = {
 } as const;
 
 export type DeviceKey = (typeof DEVICE_KEYS)[keyof typeof DEVICE_KEYS];
+
+// Shared between device.service.ts and complaint.service.ts (the latter
+// resolves a requested deviceKey to its DeviceType, then to its
+// DeviceTypeGroup, when creating/grouping complaints).
+export const DEVICE_KEY_TO_TYPE: Record<DeviceKey, DeviceType> = {
+  [DEVICE_KEYS.MASTER_PURIFIER]: DeviceType.MASTER_PURIFIER,
+  [DEVICE_KEYS.AIR_CONDITIONER]: DeviceType.AIR_CONDITIONER,
+  [DEVICE_KEYS.FRIDGE]:          DeviceType.FRIDGE,
+  [DEVICE_KEYS.WASHING_MACHINE]: DeviceType.WASHING_MACHINE,
+  [DEVICE_KEYS.GEYSER]:          DeviceType.GEYSER,
+};
 
 // Accepts a full ISO date ("YYYY-MM-DD") or a month-precision value ("YYYY-MM",
 // from radix's month/year picker) and rejects anything that isn't actually a

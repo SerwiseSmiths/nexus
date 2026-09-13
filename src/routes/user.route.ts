@@ -115,7 +115,7 @@ router.patch('/email', auth, UserController.updateEmail);
  *         schema:
  *           type: string
  *           enum: [MASTER_PURIFIER, AIR_CONDITIONER, FRIDGE, WASHING_MACHINE, GEYSER]
- *         description: Only return providers whose skills include this device type
+ *         description: Only return providers whose skill groups cover this device type
  *       - in: query
  *         name: withStats
  *         schema: { type: boolean }
@@ -140,9 +140,10 @@ router.patch('/email', auth, UserController.updateEmail);
  *               lastName:  { type: string }
  *               phoneNo:   { type: string }
  *               email:     { type: string }
- *               skills:
+ *               deviceTypes:
  *                 type: array
  *                 items: { type: string, enum: [MASTER_PURIFIER, AIR_CONDITIONER, FRIDGE, WASHING_MACHINE, GEYSER] }
+ *                 description: Resolved to their covering device-type groups, which become this provider's skills.
  *               currentAddress: { type: object }
  *               aadharAddress:  { type: object }
  *               adminNotes:     { type: string }
@@ -218,7 +219,11 @@ router.patch('/providers/:id/bank-account/approve', auth, authorize([Role.ADMIN]
  * /user/{id}/skills:
  *   patch:
  *     summary: Set a provider's skills (ADMIN)
- *     description: Used by Watchtower to configure which device types a provider can be auto-assigned complaints for.
+ *     description: >
+ *       Used by Watchtower to configure which device types a provider can be
+ *       auto-assigned complaints for. Each device type resolves to its covering
+ *       device-type group, so selecting one device type from a group grants the
+ *       whole group as a skill.
  *     tags: [User]
  *     security:
  *       - bearerAuth: []
@@ -233,9 +238,9 @@ router.patch('/providers/:id/bank-account/approve', auth, authorize([Role.ADMIN]
  *         application/json:
  *           schema:
  *             type: object
- *             required: [skills]
+ *             required: [deviceTypes]
  *             properties:
- *               skills:
+ *               deviceTypes:
  *                 type: array
  *                 items:
  *                   type: string

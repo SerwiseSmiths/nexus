@@ -40,6 +40,10 @@ enum ComplaintStage {
   QR_VALIDATED
   ESTIMATION
   APPROVAL
+  // Customer approved the quote and the provider is actively repairing the
+  // device on-site. Sits between APPROVAL and PAYMENT — see
+  // ComplaintService.respondToQuote / completeService in complaint.service.ts.
+  IN_PROGRESS
   PAYMENT
   COMPLETED
   REJECTED
@@ -181,8 +185,10 @@ model ProviderProfile {
   id               String       @id @default(uuid())
   userId           String       @unique
   user             User         @relation(fields: [userId], references: [id])
-  // Device types this provider is skilled to service
-  skills           DeviceType[] @default([])
+  // Device-type groups this provider is skilled to service — a provider must
+  // cover every device type in a group to be matched to a complaint for that
+  // group (see DeviceTypeGroup; every DeviceType belongs to exactly one).
+  skillGroups      DeviceTypeGroup[] @relation("ProviderSkillGroups")
   currentAddressId String?      @unique
   currentAddress   Address?     @relation("ProviderCurrentAddress", fields: [currentAddressId], references: [id])
   aadharAddressId  String?      @unique
@@ -324,9 +330,9 @@ model Device {
   type        DeviceType
   imageUrl    String?
   metadata    Json
-  workHistory DeviceWorkHistory[]
-  complaints  Complaint[]
-  isDeleted   Boolean             @default(false)
+  workHistory    DeviceWorkHistory[]
+  complaintLinks ComplaintDevice[]
+  isDeleted      Boolean             @default(false)
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
@@ -357,9 +363,16 @@ model Complaint {
   userId     String
   providerId String?
   addressId  String
-  deviceId   String?
-  // Strapi content-type slug for the linked device type
-  deviceKey  String?
+  // The device-type group this ticket is for — a complaint always represents
+  // exactly one group's worth of work (e.g. "AC + Fridge"), so it can be
+  // serviced by a single provider. See DeviceTypeGroup.
+  groupId    String?
+  // What the customer originally asked for at ticket-creation time, e.g.
+  // [{ "deviceKey": "air_conditioner", "quantity": 2 }, ...]. Actual Device
+  // rows (see `devices` below) get created/linked later, once a provider
+  // identifies each physical unit on-site — devices don't need to pre-exist
+  // at creation time.
+  requestedDevices Json?
   title      String
   notes      String?
   stage      ComplaintStage @default(ENTRANCE)
@@ -388,7 +401,8 @@ model Complaint {
   user          User             @relation("CustomerComplaints", fields: [userId], references: [id])
   provider      User?            @relation("ProviderComplaints", fields: [providerId], references: [id])
   address       Address          @relation(fields: [addressId], references: [id])
-  device        Device?          @relation(fields: [deviceId], references: [id])
+  group         DeviceTypeGroup? @relation(fields: [groupId], references: [id])
+  devices       ComplaintDevice[]
   parent        Complaint?       @relation("ComplaintReopened", fields: [parentId], references: [id])
   children      Complaint[]      @relation("ComplaintReopened")
   subscription  Subscription?    @relation(fields: [subscriptionId], references: [id])
@@ -406,6 +420,48 @@ model Complaint {
   @@index([parentId])
   @@index([entryQrToken])
   @@index([subscriptionId])
+  @@index([groupId])
+}
+
+// Every DeviceType belongs to exactly one active (non-deleted) group —
+// enforced at the service layer, since Postgres can't enforce "this enum
+// value appears in only one row's array" across rows. Standalone device
+// types (nothing else must be serviced alongside them) just get their own
+// 1-member group, so the group concept is universal, not special-cased.
+model DeviceTypeGroup {
+  id   String @id @default(uuid())
+  // Stable, human-readable slug (e.g. "ac_fridge") auto-generated from `name`
+  // at creation time and immutable thereafter — this is the identifier every
+  // external consumer (watchtower, radix, serwise) uses; `id` stays an
+  // internal DB implementation detail (FKs below still reference `id`).
+  key         String       @unique
+  name        String
+  deviceTypes DeviceType[] @default([])
+  isDeleted   Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  providers  ProviderProfile[] @relation("ProviderSkillGroups")
+  complaints Complaint[]
+
+  @@index([isDeleted])
+}
+
+// Links a Complaint to the physical Device units it covers. Populated once a
+// provider identifies each unit on-site (see ComplaintService.linkDevice) —
+// not necessarily at complaint-creation time, since `requestedDevices` on
+// Complaint is enough to create the ticket before real Device rows exist.
+model ComplaintDevice {
+  id          String    @id @default(uuid())
+  complaintId String
+  complaint   Complaint @relation(fields: [complaintId], references: [id])
+  deviceId    String
+  device      Device    @relation(fields: [deviceId], references: [id])
+  createdAt   DateTime  @default(now())
+
+  @@unique([complaintId, deviceId])
+  @@index([complaintId])
+  @@index([deviceId])
 }
 
 model ComplaintMedia {

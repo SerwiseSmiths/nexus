@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Complaint, DeviceType, Subscription, User } from '@prisma/client';
+import type { Complaint, Subscription, User } from '@prisma/client';
 import prisma from '@/services/prisma.service';
 import { ConfigLoader } from '@/configs/configLoader';
 import { logger } from '@/utils/logger';
@@ -39,6 +39,20 @@ const line = (emoji: string, label: string, value: unknown): string =>
     : '';
 
 type ComplaintLike = Complaint & { user?: Pick<User, 'firstName' | 'lastName' | 'phoneNo'> | null };
+
+// requestedDevices is a Json column: [{ deviceKey, quantity }, ...] — summarize
+// it into a readable line since Complaint no longer has a single deviceKey.
+function summarizeRequestedDevices(requestedDevices: unknown): string {
+  if (!Array.isArray(requestedDevices)) return '';
+  return requestedDevices
+    .map((d) => {
+      if (!d || typeof d !== 'object') return null;
+      const { deviceKey, quantity } = d as { deviceKey?: unknown; quantity?: unknown };
+      return typeof deviceKey === 'string' ? `${deviceKey} x${typeof quantity === 'number' ? quantity : 1}` : null;
+    })
+    .filter((s): s is string => Boolean(s))
+    .join(', ');
+}
 
 const userLines = (u: Pick<User, 'firstName' | 'lastName' | 'phoneNo'> | null | undefined, fallbackId?: string | null) => {
   if (u) {
@@ -128,7 +142,7 @@ export class TelegramService {
       userLines(complaint.user, complaint.userId) +
       line('📍', 'Address', address) +
       line('🛠', 'Provider', complaint.providerId ?? 'Unassigned') +
-      line('📟', 'Device Type', complaint.deviceKey) +
+      line('📟', 'Devices', summarizeRequestedDevices(complaint.requestedDevices)) +
       line('🗂', 'Stage', complaint.stage) +
       line('💳', 'Subscription', complaint.subscriptionId ? `#${complaint.subscriptionId}` : 'None') +
       line('📝', 'Notes', complaint.notes) +
@@ -138,16 +152,16 @@ export class TelegramService {
     await TelegramService.send(html);
   }
 
-  static async notifyNoProviderMatch(complaint: ComplaintLike, deviceType: DeviceType | null): Promise<void> {
+  static async notifyNoProviderMatch(complaint: ComplaintLike, groupName: string | null): Promise<void> {
     const html =
       `⚠️ <b>No Skill-Matching Provider Found</b>\n` +
       `${'─'.repeat(28)}\n` +
       line('🆔', 'Complaint ID', complaint.id) +
       line('📌', 'Title', complaint.title) +
       userLines(complaint.user, complaint.userId) +
-      line('📟', 'Device Type', deviceType ?? complaint.deviceKey) +
+      line('📦', 'Device Group', groupName ?? summarizeRequestedDevices(complaint.requestedDevices)) +
       line('📅', 'Created', fmt(complaint.createdAt)) +
-      `\nNo active provider has this device type in their skills. Please assign a provider manually.\n`;
+      `\nNo active provider has this device group in their skills. Please assign a provider manually.\n`;
 
     await TelegramService.send(html);
   }

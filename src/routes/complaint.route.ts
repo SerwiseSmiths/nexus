@@ -30,16 +30,27 @@ const router = Router();
  *         application/json:
  *           schema:
  *             type: object
- *             required: [title, addressId]
+ *             required: [title, addressId, requestedDevices]
  *             properties:
  *               title:      { type: string, example: "RO not producing water" }
  *               notes:      { type: string }
  *               addressId:  { type: string, format: uuid }
- *               deviceId:   { type: string, format: uuid }
- *               deviceKey:  { type: string, example: master_purifier }
+ *               requestedDevices:
+ *                 type: array
+ *                 description: >
+ *                   Device type + quantity requested. Devices need not pre-exist —
+ *                   physical units are identified later on-site (see /link-device).
+ *                   Requested devices spanning multiple device-type groups are
+ *                   split into one complaint per group.
+ *                 items:
+ *                   type: object
+ *                   required: [deviceKey]
+ *                   properties:
+ *                     deviceKey: { type: string, example: master_purifier }
+ *                     quantity:  { type: integer, example: 1, default: 1 }
  *               customerId: { type: string, format: uuid, description: "Required when called by ADMIN" }
  *     responses:
- *       201: { description: Complaint created }
+ *       201: { description: Complaint (or complaints, if requestedDevices spans multiple device groups) created }
  *       400: { description: Validation error }
  */
 router.post('/', auth, authorize([Role.CUSTOMER, Role.ADMIN]), ComplaintController.createComplaint);
@@ -132,7 +143,8 @@ router.delete('/:id', auth, ComplaintController.deleteComplaint);
  *       ENTRANCE → QR_VALIDATED | REJECTED,
  *       QR_VALIDATED → ESTIMATION | REJECTED,
  *       ESTIMATION → APPROVAL | REJECTED,
- *       APPROVAL → PAYMENT | ESTIMATION,
+ *       APPROVAL → IN_PROGRESS | REJECTED,
+ *       IN_PROGRESS → PAYMENT | REJECTED,
  *       PAYMENT → COMPLETED | REJECTED
  *     tags: [Complaint]
  *     security:
@@ -149,7 +161,7 @@ router.delete('/:id', auth, ComplaintController.deleteComplaint);
  *             properties:
  *               stage:
  *                 type: string
- *                 enum: [ENTRANCE, QR_VALIDATED, ESTIMATION, APPROVAL, PAYMENT, COMPLETED, REJECTED]
+ *                 enum: [ENTRANCE, QR_VALIDATED, ESTIMATION, APPROVAL, IN_PROGRESS, PAYMENT, COMPLETED, REJECTED]
  *               rejectionReason:
  *                 type: string
  *     responses:
@@ -299,9 +311,10 @@ router.patch(
  *   patch:
  *     summary: Link a device to a complaint (CUSTOMER or PROVIDER)
  *     description: >
- *       Customer can link a device they own. Provider can link a device that belongs
- *       to the complaint's customer when the complaint is in QR_VALIDATED stage;
- *       linking auto-advances the complaint to ESTIMATION.
+ *       Identifies the physical device unit(s) for the complaint's requested devices,
+ *       on-site. Customer can link a device they own. Provider can link a device that
+ *       belongs to the complaint's customer when the complaint is in QR_VALIDATED
+ *       stage; linking auto-advances the complaint to ESTIMATION.
  *     tags: [Complaint]
  *     security:
  *       - bearerAuth: []
@@ -313,12 +326,22 @@ router.patch(
  *         application/json:
  *           schema:
  *             type: object
- *             required: [deviceId]
+ *             required: [devices]
  *             properties:
- *               deviceId:  { type: string, format: uuid }
- *               deviceKey: { type: string, example: master_purifier }
+ *               devices:
+ *                 type: array
+ *                 description: >
+ *                   Each item is either an existing device (deviceId) or a brand-new
+ *                   one to create (deviceKey + metadata), but never both.
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     deviceId:  { type: string, format: uuid, description: "Existing device owned by the customer" }
+ *                     deviceKey: { type: string, example: master_purifier, description: "New device to create" }
+ *                     metadata:  { type: object, description: "Required when creating a new device via deviceKey" }
+ *                     imageUrl:  { type: string }
  *     responses:
- *       200: { description: Device linked }
+ *       200: { description: Devices linked }
  *       403: { description: Forbidden }
  */
 router.patch(
@@ -326,6 +349,31 @@ router.patch(
   auth,
   authorize([Role.CUSTOMER, Role.PROVIDER, Role.ADMIN]),
   ComplaintController.linkDevice,
+);
+
+/**
+ * @swagger
+ * /complaint/{id}/complete-service:
+ *   patch:
+ *     summary: Mark the repair itself as finished (PROVIDER)
+ *     description: >
+ *       Moves complaint from IN_PROGRESS → PAYMENT. Call this once the physical
+ *       repair is done and the customer needs to pay to close the request.
+ *     tags: [Complaint]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+ *     responses:
+ *       200: { description: Repair marked complete, complaint moved to PAYMENT }
+ *       400: { description: Complaint not in IN_PROGRESS stage }
+ *       404: { description: Complaint not found or not assigned to you }
+ */
+router.patch(
+  '/:id/complete-service',
+  auth,
+  authorize([Role.PROVIDER]),
+  ComplaintController.completeService,
 );
 
 /**

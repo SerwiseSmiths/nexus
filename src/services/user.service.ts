@@ -3,6 +3,7 @@ import prisma from '@/services/prisma.service';
 import { UploadService } from '@/services/upload.service';
 import { AddressService } from '@/services/address.service';
 import { BankService } from '@/services/bank.service';
+import { DeviceTypeGroupService } from '@/services/device-type-group.service';
 import { ApiError } from '@/utils/apiResponse';
 import { generateUniqueReferralCode } from '@/utils/referralCode';
 import type {
@@ -35,7 +36,7 @@ const PROVIDER_ADDRESS_SELECT = {
   longitude:      true,
 } satisfies Prisma.AddressSelect;
 
-// Fields included in every public profile response — skills live on the
+// Fields included in every public profile response — skillGroups live on the
 // ProviderProfile relation, but the API keeps exposing them flat on the user
 // object (see flattenProfile) so callers never need to know about the split.
 const PROFILE_SELECT = {
@@ -50,14 +51,21 @@ const PROFILE_SELECT = {
   referralCode: true,
   createdAt:    true,
   updatedAt:    true,
-  providerProfile: { select: { skills: true } },
+  providerProfile: {
+    select: {
+      skillGroups: {
+        where:  { isDeleted: false },
+        select: { key: true, name: true, deviceTypes: true },
+      },
+    },
+  },
 } satisfies Prisma.UserSelect;
 
 type ProfileRow = Prisma.UserGetPayload<{ select: typeof PROFILE_SELECT }>;
 
 function flattenProfile(user: ProfileRow) {
   const { providerProfile, ...rest } = user;
-  return { ...rest, skills: providerProfile?.skills ?? [] };
+  return { ...rest, skillGroups: providerProfile?.skillGroups ?? [] };
 }
 
 const PROVIDER_DETAIL_SELECT = {
@@ -73,7 +81,10 @@ const PROVIDER_DETAIL_SELECT = {
   updatedAt: true,
   providerProfile: {
     select: {
-      skills:          true,
+      skillGroups: {
+        where:  { isDeleted: false },
+        select: { key: true, name: true, deviceTypes: true },
+      },
       currentAddress:  { select: PROVIDER_ADDRESS_SELECT },
       aadharAddress:   { select: PROVIDER_ADDRESS_SELECT },
       adminNotes:      true,
@@ -103,7 +114,7 @@ function flattenProviderDetail(user: ProviderDetailRow) {
   const { providerProfile, ...rest } = user;
   return {
     ...rest,
-    skills:             providerProfile?.skills ?? [],
+    skillGroups:        providerProfile?.skillGroups ?? [],
     currentAddress:     providerProfile?.currentAddress ?? null,
     aadharAddress:      providerProfile?.aadharAddress ?? null,
     adminNotes:         providerProfile?.adminNotes ?? null,
@@ -220,7 +231,9 @@ export class UserService {
         role: Role.PROVIDER,
         isDeleted: false,
         isActive: true,
-        ...(deviceType && { providerProfile: { skills: { has: deviceType } } }),
+        ...(deviceType && {
+          providerProfile: { skillGroups: { some: { isDeleted: false, deviceTypes: { has: deviceType } } } },
+        }),
         ...(search && {
           OR: [
             { firstName: { contains: search, mode: 'insensitive' } },
@@ -231,34 +244,36 @@ export class UserService {
       },
       select: {
         id: true, firstName: true, lastName: true, phoneNo: true, email: true, avatar: true,
-        providerProfile: { select: { skills: true } },
+        providerProfile: {
+          select: { skillGroups: { where: { isDeleted: false }, select: { key: true, name: true, deviceTypes: true } } },
+        },
       },
       orderBy: { firstName: 'asc' },
     });
 
     return providers.map(({ providerProfile, ...provider }) => ({
       ...provider,
-      skills: providerProfile?.skills ?? [],
+      skillGroups: providerProfile?.skillGroups ?? [],
     }));
   }
 
   // Providers self-edit their own skills; admins may edit any provider's skills
   // via the same method (see UserController.updateSkills / updateProviderSkills).
-  static async updateSkills({ userId, skills }: UpdateSkillsInput) {
-    const unique = Array.from(new Set(skills));
-    const invalid = unique.filter(s => !Object.values(DeviceType).includes(s));
-    if (invalid.length > 0) {
-      throw new ApiError(400, `Invalid device type(s): ${invalid.join(', ')}`);
-    }
-
+  // The client always sends device *types* (radix keeps its per-device-type
+  // checkbox UI unchanged) — this resolves them to the group(s) that cover
+  // them and stores the group(s) as the actual skill. Picking one device type
+  // out of a multi-type group grants the whole group.
+  static async updateSkills({ userId, deviceTypes }: UpdateSkillsInput) {
     const user = await prisma.user.findFirst({ where: { id: userId, isDeleted: false } });
     if (!user) throw new ApiError(404, 'User not found');
     if (user.role !== Role.PROVIDER) throw new ApiError(400, 'Only providers can have skills');
 
+    const groupIds = await DeviceTypeGroupService.resolveGroupIdsForDeviceTypes(Array.from(new Set(deviceTypes)));
+
     await prisma.providerProfile.upsert({
       where:  { userId },
-      update: { skills: unique },
-      create: { userId, skills: unique },
+      update: { skillGroups: { set: groupIds.map((id) => ({ id })) } },
+      create: { userId, skillGroups: { connect: groupIds.map((id) => ({ id })) } },
     });
 
     const updated = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: PROFILE_SELECT });
@@ -403,7 +418,7 @@ export class UserService {
     lastName,
     phoneNo,
     email,
-    skills,
+    deviceTypes,
     currentAddress,
     aadharAddress,
     adminNotes,
@@ -427,6 +442,7 @@ export class UserService {
     }
 
     await assertValidProviderTierId(providerTierId);
+    const groupIds = await DeviceTypeGroupService.resolveGroupIdsForDeviceTypes(Array.from(new Set(deviceTypes ?? [])));
 
     const provider = await prisma.$transaction(async (tx) => {
       const created = await tx.user.create({
@@ -450,7 +466,7 @@ export class UserService {
       await tx.providerProfile.create({
         data: {
           userId: created.id,
-          skills: skills ?? [],
+          skillGroups: { connect: groupIds.map((id) => ({ id })) },
           adminNotes: adminNotes ?? null,
           providerTierId: providerTierId ?? null,
           currentAddressId,
@@ -478,7 +494,7 @@ export class UserService {
     lastName,
     phoneNo,
     email,
-    skills,
+    deviceTypes,
     currentAddress,
     aadharAddress,
     adminNotes,
@@ -516,8 +532,12 @@ export class UserService {
       ? await UserService.upsertProviderAddress(provider.providerProfile?.aadharAddressId, aadharAddress, providerId)
       : undefined;
 
+    const groupIds = deviceTypes !== undefined
+      ? await DeviceTypeGroupService.resolveGroupIdsForDeviceTypes(Array.from(new Set(deviceTypes)))
+      : undefined;
+
     if (
-      skills !== undefined ||
+      groupIds !== undefined ||
       currentAddressId !== undefined ||
       aadharAddressId !== undefined ||
       adminNotes !== undefined ||
@@ -526,7 +546,7 @@ export class UserService {
       await prisma.providerProfile.upsert({
         where: { userId: providerId },
         update: {
-          ...(skills !== undefined && { skills }),
+          ...(groupIds !== undefined && { skillGroups: { set: groupIds.map((id) => ({ id })) } }),
           ...(currentAddressId !== undefined && { currentAddressId }),
           ...(aadharAddressId !== undefined && { aadharAddressId }),
           ...(adminNotes !== undefined && { adminNotes }),
@@ -534,7 +554,7 @@ export class UserService {
         },
         create: {
           userId: providerId,
-          skills: skills ?? [],
+          skillGroups: { connect: (groupIds ?? []).map((id) => ({ id })) },
           currentAddressId: currentAddressId ?? null,
           aadharAddressId:  aadharAddressId ?? null,
           adminNotes: adminNotes ?? null,

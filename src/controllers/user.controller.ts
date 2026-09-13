@@ -134,12 +134,12 @@ export class UserController {
 
   static async updateSkills(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { skills } = req.body as UpdateSkillsBody;
-      if (!Array.isArray(skills)) {
-        return ApiResponse.error(res, 400, 'skills must be an array of device types');
+      const { deviceTypes } = req.body as UpdateSkillsBody;
+      if (!Array.isArray(deviceTypes)) {
+        return ApiResponse.error(res, 400, 'deviceTypes must be an array of device types');
       }
 
-      const user = await UserService.updateSkills({ userId: req.user!.id, skills });
+      const user = await UserService.updateSkills({ userId: req.user!.id, deviceTypes });
       return ApiResponse.success(res, 200, 'Skills updated successfully', { user });
     } catch (error) {
       next(error);
@@ -148,12 +148,12 @@ export class UserController {
 
   static async updateProviderSkills(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { skills } = req.body as UpdateSkillsBody;
-      if (!Array.isArray(skills)) {
-        return ApiResponse.error(res, 400, 'skills must be an array of device types');
+      const { deviceTypes } = req.body as UpdateSkillsBody;
+      if (!Array.isArray(deviceTypes)) {
+        return ApiResponse.error(res, 400, 'deviceTypes must be an array of device types');
       }
 
-      const user = await UserService.updateSkills({ userId: req.params.id as string, skills });
+      const user = await UserService.updateSkills({ userId: req.params.id as string, deviceTypes });
       return ApiResponse.success(res, 200, 'Provider skills updated successfully', { user });
     } catch (error) {
       next(error);

@@ -138,7 +138,7 @@ router.post('/for-customer', auth, authorize([Role.PROVIDER, Role.ADMIN]), Devic
  *       - in: query
  *         name: deviceKey
  *         schema: { type: string }
- *         description: Filter devices by device type (e.g. the complaint's deviceKey)
+ *         description: Filter devices by device type key
  *     responses:
  *       200: { description: Devices fetched }
  */

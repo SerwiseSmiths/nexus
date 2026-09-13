@@ -3,10 +3,13 @@ import { randomUUID } from 'crypto';
 import prisma from '@/services/prisma.service';
 import { ApiError } from '@/utils/apiResponse';
 import { logger } from '@/utils/logger';
+import { describeZodError } from '@/utils/zodError';
 import { RealtimeService } from '@/services/realtime.service';
 import { NotificationService } from '@/services/notification.service';
 import { TelegramService } from '@/services/telegram.service';
 import { WalletService } from '@/services/wallet.service';
+import { DeviceTypeGroupService } from '@/services/device-type-group.service';
+import { DEVICE_KEY_TO_TYPE, DEVICE_META_VALIDATORS, type DeviceKey } from '@/types/device.types';
 import type {
   CreateComplaintInput,
   UpdateStageInput,
@@ -17,6 +20,7 @@ import type {
   ValidateQrInput,
   ReopenComplaintInput,
   CompletePaymentInput,
+  RequestedDevice,
 } from '@/types/complaint.types';
 
 // ---------------------------------------------------------------------------
@@ -31,8 +35,16 @@ const COMPLAINT_INCLUDE = {
     select: { id: true, firstName: true, lastName: true, phoneNo: true, email: true, avatar: true },
   },
   address: true,
-  device: {
-    select: { id: true, type: true, deviceKey: true, imageUrl: true, metadata: true },
+  // External consumers reference a group by its stable `key`, never by the
+  // internal DB `id` — omitted here so nothing downstream is tempted to use it.
+  group: { select: { key: true, name: true, deviceTypes: true } },
+  // Physical devices identified so far (may be empty right after creation —
+  // see requestedDevices for what was originally asked for before any
+  // provider identified real units on-site).
+  devices: {
+    include: {
+      device: { select: { id: true, type: true, deviceKey: true, imageUrl: true, metadata: true } },
+    },
   },
   media: {
     where:   { isDeleted: false },
@@ -48,13 +60,14 @@ type ComplaintWithRelations = Prisma.ComplaintGetPayload<{ include: typeof COMPL
 // ---------------------------------------------------------------------------
 
 const STAGE_TRANSITIONS: Record<ComplaintStage, ComplaintStage[]> = {
-  [ComplaintStage.ENTRANCE]:    [ComplaintStage.QR_VALIDATED, ComplaintStage.REJECTED],
+  [ComplaintStage.ENTRANCE]:     [ComplaintStage.QR_VALIDATED, ComplaintStage.REJECTED],
   [ComplaintStage.QR_VALIDATED]: [ComplaintStage.ESTIMATION, ComplaintStage.REJECTED],
-  [ComplaintStage.ESTIMATION]:  [ComplaintStage.APPROVAL, ComplaintStage.REJECTED],
-  [ComplaintStage.APPROVAL]:    [ComplaintStage.PAYMENT, ComplaintStage.REJECTED],
-  [ComplaintStage.PAYMENT]:     [ComplaintStage.COMPLETED, ComplaintStage.REJECTED],
-  [ComplaintStage.COMPLETED]:   [],
-  [ComplaintStage.REJECTED]:    [],
+  [ComplaintStage.ESTIMATION]:   [ComplaintStage.APPROVAL, ComplaintStage.REJECTED],
+  [ComplaintStage.APPROVAL]:     [ComplaintStage.IN_PROGRESS, ComplaintStage.REJECTED],
+  [ComplaintStage.IN_PROGRESS]:  [ComplaintStage.PAYMENT, ComplaintStage.REJECTED],
+  [ComplaintStage.PAYMENT]:      [ComplaintStage.COMPLETED, ComplaintStage.REJECTED],
+  [ComplaintStage.COMPLETED]:    [],
+  [ComplaintStage.REJECTED]:     [],
 };
 
 // ---------------------------------------------------------------------------
@@ -73,6 +86,10 @@ const STAGE_NOTIFICATIONS: Partial<Record<ComplaintStage, { title: string; body:
   [ComplaintStage.APPROVAL]: {
     title: 'Quote Ready for Review',
     body:  'Your provider submitted a quote. Please review and approve.',
+  },
+  [ComplaintStage.IN_PROGRESS]: {
+    title: 'Repair Started',
+    body:  'Your provider has started repairing your device.',
   },
   [ComplaintStage.PAYMENT]: {
     title: 'Payment Required',
@@ -122,108 +139,92 @@ function isFilterRelatedQuote(items: unknown): boolean {
 export class ComplaintService {
   // ─── Create ───────────────────────────────────────────────────────────────
 
-  // A request naming multiple devices raises one complaint per device — each
-  // gets its own provider assignment / stage lifecycle, and is tagged with
-  // that specific device's own type rather than one shared deviceKey.
+  // A request naming multiple device types/quantities is split by
+  // DeviceTypeGroup — devices sharing a group bundle into ONE complaint
+  // (serviced by a single provider), a different group becomes a separate
+  // complaint. Actual Device rows don't need to exist yet; requestedDevices
+  // records what was asked for until a provider identifies real units
+  // on-site (see linkDevice).
   static async createComplaint({
     userId,
     title,
     notes,
     addressId,
-    deviceId,
-    deviceIds,
-    deviceKey,
+    requestedDevices,
   }: CreateComplaintInput): Promise<ComplaintWithRelations[]> {
     const address = await prisma.address.findFirst({
       where: { id: addressId, userId, isDeleted: false },
     });
     if (!address) throw new ApiError(404, 'Address not found');
 
-    const ids = deviceIds?.length ? deviceIds : [deviceId];
+    // Resolve every requested device to its group up front — throw before
+    // creating anything if any deviceKey is unknown (same all-or-nothing
+    // principle as the old per-device-id validation).
+    const byGroup = new Map<string, RequestedDevice[]>();
+    for (const item of requestedDevices) {
+      const deviceType = DEVICE_KEY_TO_TYPE[item.deviceKey as DeviceKey];
+      if (!deviceType) throw new ApiError(400, `Unknown device key: ${item.deviceKey}`);
 
-    const complaints: ComplaintWithRelations[] = [];
-    for (const id of ids) {
-      let resolvedDeviceKey = deviceKey ?? null;
+      const group = await DeviceTypeGroupService.findByDeviceType(deviceType);
+      const existing = byGroup.get(group.id) ?? [];
+      existing.push(item);
+      byGroup.set(group.id, existing);
+    }
 
-      if (id) {
-        const device = await prisma.device.findFirst({
-          where: { id, userId, isDeleted: false },
-        });
-        if (!device) throw new ApiError(404, 'Device not found');
-        resolvedDeviceKey = device.deviceKey;
-      }
+    // All-or-nothing: every complaint in the batch commits together.
+    const complaints = await prisma.$transaction(
+      Array.from(byGroup.entries()).map(([groupId, items]) =>
+        prisma.complaint.create({
+          data: {
+            userId,
+            title,
+            notes:     notes ?? null,
+            addressId,
+            groupId,
+            requestedDevices: items as unknown as Prisma.InputJsonValue,
+            stage:     ComplaintStage.ENTRANCE,
+          },
+          include: COMPLAINT_INCLUDE,
+        }),
+      ),
+    );
 
-      complaints.push(
-        await ComplaintService.createOne({ userId, title, notes, addressId, deviceId: id, deviceKey: resolvedDeviceKey }),
+    // Side effects only fire once the whole batch is durably committed.
+    for (const complaint of complaints) {
+      emit(() => RealtimeService.emitComplaintCreated(complaint as unknown as Record<string, unknown>));
+      emit(() =>
+        NotificationService.sendToUser({
+          userId,
+          title: 'Complaint Submitted',
+          body:  `Your complaint "${title}" has been submitted. We're finding a provider.`,
+          type:  NotificationType.COMPLAINT,
+          complaintId: complaint.id,
+        }),
       );
+      emit(() => ComplaintService.autoAssignProvider(complaint.id, []));
+      emit(() => TelegramService.notifyComplaintCreated(complaint));
     }
 
     return complaints;
-  }
-
-  private static async createOne({
-    userId,
-    title,
-    notes,
-    addressId,
-    deviceId,
-    deviceKey,
-  }: {
-    userId: string;
-    title: string;
-    notes?: string;
-    addressId: string;
-    deviceId?: string;
-    deviceKey: string | null;
-  }): Promise<ComplaintWithRelations> {
-    const complaint = await prisma.complaint.create({
-      data: {
-        userId,
-        title,
-        notes:     notes ?? null,
-        addressId,
-        deviceId:  deviceId ?? null,
-        deviceKey,
-        stage:     ComplaintStage.ENTRANCE,
-      },
-      include: COMPLAINT_INCLUDE,
-    });
-
-    emit(() => RealtimeService.emitComplaintCreated(complaint as unknown as Record<string, unknown>));
-    emit(() =>
-      NotificationService.sendToUser({
-        userId,
-        title: 'Complaint Submitted',
-        body:  `Your complaint "${title}" has been submitted. We're finding a provider.`,
-        type:  NotificationType.COMPLAINT,
-        complaintId: complaint.id,
-      }),
-    );
-
-    // Auto-assign the best available provider
-    emit(() => ComplaintService.autoAssignProvider(complaint.id, []));
-
-    emit(() => TelegramService.notifyComplaintCreated(complaint));
-
-    return complaint;
   }
 
   // ─── Auto-assign ──────────────────────────────────────────────────────────
 
   static async autoAssignProvider(complaintId: string, excludeIds: string[]): Promise<void> {
     const complaint = await prisma.complaint.findFirst({
-      where:   { id: complaintId, isDeleted: false },
-      include: { device: { select: { type: true } } },
+      where: { id: complaintId, isDeleted: false },
+      include: { group: true },
     });
     if (!complaint) {
       logger.warn('[Complaint] autoAssignProvider called for missing complaint', { complaintId });
       return;
     }
 
-    // Only providers whose skills include the complaint's device type are eligible.
-    // If the complaint has no linked device yet, its device type is unknown, so
-    // fall back to matching any active provider rather than blocking assignment.
-    const deviceType = complaint.device?.type ?? null;
+    // A provider is eligible only if their skillGroups cover this complaint's
+    // entire device-type group. If the complaint has no group yet (shouldn't
+    // normally happen — createComplaint always sets one), fall back to
+    // matching any active provider rather than blocking assignment.
+    const groupId = complaint.groupId;
 
     const providers = await prisma.user.findMany({
       where: {
@@ -231,7 +232,7 @@ export class ComplaintService {
         isActive:  true,
         isDeleted: false,
         id: excludeIds.length > 0 ? { notIn: excludeIds } : undefined,
-        ...(deviceType && { providerProfile: { skills: { has: deviceType } } }),
+        ...(groupId && { providerProfile: { skillGroups: { some: { id: groupId } } } }),
       },
       include: {
         _count: {
@@ -249,11 +250,11 @@ export class ComplaintService {
 
     if (providers.length === 0) {
       logger.warn('[Complaint] No skill-matching providers found for auto-assign', {
-        complaintId, deviceType, excludeIds,
+        complaintId, groupId, excludeIds,
       });
       // Leave the complaint unassigned rather than assigning a provider without
       // the matching skill — flag admins so they can assign one manually.
-      emit(() => TelegramService.notifyNoProviderMatch(complaint, deviceType));
+      emit(() => TelegramService.notifyNoProviderMatch(complaint, complaint.group?.name ?? null));
       return;
     }
 
@@ -263,7 +264,7 @@ export class ComplaintService {
     );
 
     logger.info('[Complaint] Auto-assigning provider', {
-      complaintId, providerId: best.id, deviceType, candidateCount: providers.length,
+      complaintId, providerId: best.id, groupId, candidateCount: providers.length,
     });
 
     await ComplaintService.assignProvider({ complaintId, providerId: best.id });
@@ -302,12 +303,15 @@ export class ComplaintService {
     });
     if (!complaint) throw new ApiError(404, 'Complaint not found');
 
+    // 404, not 403 — standardized 2026-09-12 to match every other
+    // "not yours" check in this file (non-leaking: doesn't confirm the
+    // complaint exists to someone with no relationship to it).
     if (
       requesterRole !== Role.ADMIN &&
       complaint.userId !== requesterId &&
       complaint.providerId !== requesterId
     ) {
-      throw new ApiError(403, 'Forbidden');
+      throw new ApiError(404, 'Complaint not found');
     }
 
     return complaint;
@@ -320,11 +324,20 @@ export class ComplaintService {
     stage,
     rejectionReason,
     updatedById,
+    requesterRole,
   }: UpdateStageInput): Promise<ComplaintWithRelations> {
+    // A PROVIDER may only transition a complaint they're actually assigned
+    // to — previously this had no ownership check at all (unlike every other
+    // provider-facing method in this file), so any authenticated provider
+    // could change the stage of any complaint. ADMIN is unrestricted by design.
     const complaint = await prisma.complaint.findFirst({
-      where: { id: complaintId, isDeleted: false },
+      where: {
+        id: complaintId,
+        isDeleted: false,
+        ...(requesterRole === Role.PROVIDER && { providerId: updatedById }),
+      },
     });
-    if (!complaint) throw new ApiError(404, 'Complaint not found');
+    if (!complaint) throw new ApiError(404, 'Complaint not found or not assigned to you');
 
     const allowed = STAGE_TRANSITIONS[complaint.stage];
     if (!allowed.includes(stage)) {
@@ -493,6 +506,13 @@ export class ComplaintService {
       }),
     );
 
+    // Previously a rejection just cleared providerId and stopped there — the
+    // complaint silently stalled unassigned until an admin manually
+    // reassigned it, despite the notification above promising "we are
+    // finding another." Re-run auto-assign excluding everyone who's already
+    // rejected this complaint.
+    emit(() => ComplaintService.autoAssignProvider(complaintId, updated.rejectedProviderIds));
+
     return updated;
   }
 
@@ -555,10 +575,13 @@ export class ComplaintService {
     }
 
     if (approved) {
+      // Non-zero quotes move to IN_PROGRESS — the provider is now expected to
+      // actually do the repair before calling completeService() to advance to
+      // PAYMENT. Zero-amount quotes skip both (nothing to pay for), same as before.
       const nextStage =
         complaint.quote.totalAmount === 0
           ? ComplaintStage.COMPLETED
-          : ComplaintStage.PAYMENT;
+          : ComplaintStage.IN_PROGRESS;
 
       const [updatedComplaint] = await prisma.$transaction([
         prisma.complaint.update({
@@ -589,7 +612,8 @@ export class ComplaintService {
       );
 
       if (nextStage === ComplaintStage.COMPLETED) {
-        await ComplaintService.recordServiceCompletionHistory(complaint.deviceId, complaint.quote.items);
+        const links = await prisma.complaintDevice.findMany({ where: { complaintId }, select: { deviceId: true } });
+        await ComplaintService.recordServiceCompletionHistory(links.map((l) => l.deviceId), complaint.quote.items);
       }
 
       return updatedComplaint;
@@ -636,39 +660,77 @@ export class ComplaintService {
 
   // ─── Link Device ──────────────────────────────────────────────────────────
 
-  static async linkDevice({ complaintId, requesterId, requesterRole, deviceId, deviceKey }: LinkDeviceInput) {
+  // A provider identifies the physical units on-site — each item either
+  // points at a device the customer already owns (deviceId) or describes a
+  // brand-new one to create (deviceKey + metadata), matching the same
+  // validation DeviceService.addDevice applies. Devices never need to
+  // pre-exist at complaint-creation time; this is where they actually get
+  // created/linked.
+  static async linkDevice({ complaintId, requesterId, requesterRole, devices }: LinkDeviceInput) {
     const complaint = await prisma.complaint.findFirst({
       where: { id: complaintId, isDeleted: false },
     });
     if (!complaint) throw new ApiError(404, 'Complaint not found');
 
+    // 404, not 403 — standardized 2026-09-12, see getById for rationale.
     if (requesterRole === Role.PROVIDER) {
       if (complaint.providerId !== requesterId) {
-        throw new ApiError(403, 'This complaint is not assigned to you');
+        throw new ApiError(404, 'Complaint not found or not assigned to you');
       }
     } else if (requesterRole !== Role.ADMIN) {
       if (complaint.userId !== requesterId) {
-        throw new ApiError(403, 'Forbidden');
+        throw new ApiError(404, 'Complaint not found');
       }
     }
 
-    // Device must belong to the complaint's customer
-    const device = await prisma.device.findFirst({
-      where: { id: deviceId, userId: complaint.userId, isDeleted: false },
-    });
-    if (!device) throw new ApiError(404, 'Device not found');
+    const linkedDeviceIds: string[] = [];
+    for (const item of devices) {
+      if (item.deviceId) {
+        // Existing device — must belong to the complaint's customer.
+        const device = await prisma.device.findFirst({
+          where: { id: item.deviceId, userId: complaint.userId, isDeleted: false },
+        });
+        if (!device) throw new ApiError(404, 'Device not found');
+        linkedDeviceIds.push(device.id);
+        continue;
+      }
 
+      // Brand-new device — validate its metadata the same way DeviceService.addDevice does.
+      const deviceKey = item.deviceKey as DeviceKey;
+      const validator = DEVICE_META_VALIDATORS[deviceKey];
+      if (!validator) throw new ApiError(400, `Unknown device key: ${deviceKey}`);
+
+      const parsed = validator.safeParse(item.metadata ?? {});
+      if (!parsed.success) throw new ApiError(400, describeZodError(parsed.error), parsed.error.issues);
+
+      const created = await prisma.device.create({
+        data: {
+          userId:    complaint.userId,
+          addressId: complaint.addressId,
+          deviceKey,
+          type:      DEVICE_KEY_TO_TYPE[deviceKey],
+          imageUrl:  item.imageUrl ?? null,
+          metadata:  parsed.data,
+        },
+      });
+      linkedDeviceIds.push(created.id);
+    }
+
+    await prisma.complaintDevice.createMany({
+      data: linkedDeviceIds.map((deviceId) => ({ complaintId, deviceId })),
+      skipDuplicates: true,
+    });
+
+    const wasQrValidated = complaint.stage === ComplaintStage.QR_VALIDATED;
     const updated = await prisma.complaint.update({
       where: { id: complaintId },
       data: {
-        deviceId,
-        deviceKey: deviceKey ?? device.deviceKey,
-        stage:     complaint.stage === ComplaintStage.QR_VALIDATED ? ComplaintStage.ESTIMATION : complaint.stage,
+        stage: wasQrValidated ? ComplaintStage.ESTIMATION : complaint.stage,
       },
       include: COMPLAINT_INCLUDE,
     });
 
-    if (complaint.stage === ComplaintStage.QR_VALIDATED) {
+    if (wasQrValidated) {
       emit(() =>
         NotificationService.sendToUser({
           userId:      complaint.userId,
@@ -820,19 +882,35 @@ export class ComplaintService {
 
     const ownerId = asAdmin ? original.userId : userId;
 
-    const newComplaint = await prisma.complaint.create({
+    let newComplaint = await prisma.complaint.create({
       data: {
         userId:    ownerId,
         title:     title ?? original.title,
         notes:     notes ?? null,
         addressId: addressId ?? original.addressId,
-        deviceId:  original.deviceId,
-        deviceKey: original.deviceKey,
+        groupId:   original.groupId,
+        requestedDevices: original.requestedDevices ?? Prisma.JsonNull,
         stage:     ComplaintStage.ENTRANCE,
         parentId:  complaintId,
       },
       include: COMPLAINT_INCLUDE,
     });
+
+    // Carry over whichever physical devices were already identified on the
+    // original complaint — the reopened job is presumably about the same units.
+    const originalLinks = await prisma.complaintDevice.findMany({ where: { complaintId }, select: { deviceId: true } });
+    if (originalLinks.length > 0) {
+      await prisma.complaintDevice.createMany({
+        data: originalLinks.map((l) => ({ complaintId: newComplaint.id, deviceId: l.deviceId })),
+        skipDuplicates: true,
+      });
+      // Re-fetch — the object above was fetched before these links existed,
+      // so its `devices` include would otherwise come back empty.
+      newComplaint = await prisma.complaint.findUniqueOrThrow({
+        where: { id: newComplaint.id },
+        include: COMPLAINT_INCLUDE,
+      });
+    }
 
     emit(() =>
       NotificationService.sendToUser({
@@ -843,6 +921,12 @@ export class ComplaintService {
         complaintId: newComplaint.id,
       }),
     );
+
+    // The notification above promises "we are finding a provider" — this is
+    // a fresh complaint created via a raw prisma.complaint.create (not the
+    // createComplaint() path), so it never actually triggered auto-assign
+    // without this call. Same class of gap as rejectAssignment.
+    emit(() => ComplaintService.autoAssignProvider(newComplaint.id, []));
 
     return newComplaint;
   }
@@ -907,7 +991,7 @@ export class ComplaintService {
         const [updated] = await prisma.$transaction([
           prisma.complaint.update({
             where: { id: complaintId },
-            data:  { stage: ComplaintStage.PAYMENT },
+            data:  { stage: ComplaintStage.IN_PROGRESS },
             include: COMPLAINT_INCLUDE,
           }),
           prisma.quote.update({
@@ -917,6 +1001,13 @@ export class ComplaintService {
         ]);
         return updated as ComplaintWithRelations;
       }
+
+      case ComplaintStage.IN_PROGRESS:
+        return prisma.complaint.update({
+          where: { id: complaintId },
+          data:  { stage: ComplaintStage.PAYMENT },
+          include: COMPLAINT_INCLUDE,
+        });
 
       case ComplaintStage.PAYMENT:
         return prisma.complaint.update({
@@ -930,25 +1021,61 @@ export class ComplaintService {
     }
   }
 
+  // ─── Complete Service (provider marks the repair itself done) ────────────
+
+  static async completeService(complaintId: string, providerId: string) {
+    const complaint = await prisma.complaint.findFirst({
+      where: { id: complaintId, providerId, isDeleted: false },
+    });
+    if (!complaint) throw new ApiError(404, 'Complaint not found or not assigned to you');
+    if (complaint.stage !== ComplaintStage.IN_PROGRESS) {
+      throw new ApiError(400, 'Complaint is not in progress');
+    }
+
+    const updated = await prisma.complaint.update({
+      where: { id: complaintId },
+      data:  { stage: ComplaintStage.PAYMENT },
+      include: COMPLAINT_INCLUDE,
+    });
+
+    emit(() =>
+      RealtimeService.emitStageChanged(
+        updated as unknown as Record<string, unknown>,
+        ComplaintStage.IN_PROGRESS,
+        ComplaintStage.PAYMENT,
+      ),
+    );
+    emit(() =>
+      NotificationService.sendToUser({
+        userId:      complaint.userId,
+        title:       'Repair Completed',
+        body:        'Your device has been repaired. Please complete payment to close the request.',
+        type:        NotificationType.COMPLAINT,
+        complaintId,
+      }),
+    );
+
+    return updated;
+  }
+
   // ─── Complete Payment ─────────────────────────────────────────────────────
 
   // Auto-records a REPAIR (or FILTER_CHANGE, if the quote looks filter-related)
-  // work-history entry against the linked device whenever a service completes.
+  // work-history entry against every device linked to the complaint whenever
+  // a service completes — a complaint can now cover multiple devices (all in
+  // the same DeviceTypeGroup), so this records one entry per device.
   private static async recordServiceCompletionHistory(
-    deviceId: string | null,
+    deviceIds: string[],
     quoteItems: unknown,
   ): Promise<void> {
-    if (!deviceId) return;
+    if (deviceIds.length === 0) return;
     try {
-      await prisma.deviceWorkHistory.create({
-        data: {
-          deviceId,
-          event: isFilterRelatedQuote(quoteItems) ? WorkHistoryEvent.FILTER_CHANGE : WorkHistoryEvent.REPAIR,
-          eventDate: new Date(),
-        },
+      const event = isFilterRelatedQuote(quoteItems) ? WorkHistoryEvent.FILTER_CHANGE : WorkHistoryEvent.REPAIR;
+      await prisma.deviceWorkHistory.createMany({
+        data: deviceIds.map((deviceId) => ({ deviceId, event, eventDate: new Date() })),
       });
     } catch (error) {
-      logger.error('Failed to record service completion history', { error, deviceId });
+      logger.error('Failed to record service completion history', { error, deviceIds });
     }
   }
 
@@ -965,24 +1092,41 @@ export class ComplaintService {
     const totalAmount = complaint.quote?.totalAmount ?? 0;
     const paymentProvider = method === 'CASH' ? PaymentProvider.CASH : PaymentProvider.RAZORPAY;
 
-    const updated = await prisma.$transaction(async (tx) => {
-      const updatedComplaint = await tx.complaint.update({
-        where: { id: complaintId },
-        data:  { stage: ComplaintStage.COMPLETED },
-        include: COMPLAINT_INCLUDE,
-      });
+    const updated = await prisma.$transaction(
+      async (tx) => {
+        // For WALLET payments, actually charge the customer before crediting
+        // the provider or closing the complaint — previously `method: 'WALLET'`
+        // completed the job and paid the provider with no verification the
+        // customer had the funds (or any wallet debit at all). Insufficient
+        // balance throws and rolls back the whole transaction: complaint stays
+        // in PAYMENT, provider isn't credited, customer isn't charged.
+        if (method === 'WALLET' && totalAmount > 0) {
+          await WalletService.debitCustomerForComplaintPayment(complaint.userId, totalAmount, complaintId, tx);
+        }
 
-      // Credit provider wallet — routed through WalletService for the same
-      // serializable-isolation / audit-ledger guarantees every other wallet
-      // mutation gets, composed inside this same transaction.
-      if (totalAmount > 0) {
-        await WalletService.creditProviderEarnings(providerId, totalAmount, complaintId, paymentProvider, tx);
-      }
+        const updatedComplaint = await tx.complaint.update({
+          where: { id: complaintId },
+          data:  { stage: ComplaintStage.COMPLETED },
+          include: COMPLAINT_INCLUDE,
+        });
 
-      return updatedComplaint;
-    });
+        // Credit provider wallet — routed through WalletService for the same
+        // serializable-isolation / audit-ledger guarantees every other wallet
+        // mutation gets, composed inside this same transaction.
+        if (totalAmount > 0) {
+          await WalletService.creditProviderEarnings(providerId, totalAmount, complaintId, paymentProvider, tx);
+        }
 
-    await ComplaintService.recordServiceCompletionHistory(complaint.deviceId, complaint.quote?.items);
+        return updatedComplaint;
+      },
+      // Serializable: prevents a customer from completing two WALLET-paid jobs
+      // concurrently and having both balance checks pass against the same
+      // pre-debit balance (the classic concurrent-overdraft race).
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+
+    const deviceLinks = await prisma.complaintDevice.findMany({ where: { complaintId }, select: { deviceId: true } });
+    await ComplaintService.recordServiceCompletionHistory(deviceLinks.map((l) => l.deviceId), complaint.quote?.items);
 
     emit(() =>
       RealtimeService.emitStageChanged(
@@ -1021,8 +1165,9 @@ export class ComplaintService {
     });
     if (!complaint) throw new ApiError(404, 'Complaint not found');
 
+    // 404, not 403 — standardized 2026-09-12, see getById for rationale.
     if (requesterRole !== Role.ADMIN && complaint.userId !== requesterId) {
-      throw new ApiError(403, 'Forbidden');
+      throw new ApiError(404, 'Complaint not found');
     }
 
     if (

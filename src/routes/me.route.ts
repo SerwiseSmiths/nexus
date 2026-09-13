@@ -93,7 +93,10 @@ router.patch('/profile', auth, UserController.updateProfile);
  * /me/skills:
  *   patch:
  *     summary: Set the device types this provider is skilled to service
- *     description: Providers only see complaints auto-assigned for device types listed in their skills.
+ *     description: >
+ *       Providers only see complaints auto-assigned for device-type groups covering
+ *       these device types. Each device type belongs to exactly one group — selecting
+ *       any one device type from a group grants the whole group as a skill.
  *     tags: [Me]
  *     security:
  *       - bearerAuth: []
@@ -103,9 +106,9 @@ router.patch('/profile', auth, UserController.updateProfile);
  *         application/json:
  *           schema:
  *             type: object
- *             required: [skills]
+ *             required: [deviceTypes]
  *             properties:
- *               skills:
+ *               deviceTypes:
  *                 type: array
  *                 items:
  *                   type: string

@@ -450,12 +450,15 @@ export class PaymentService {
     razorpayPaymentId: string,
   ): Promise<void> {
     const meta = paymentOrder.meta as {
-      serviceType?: string;
-      deviceLines?: string;
-      addressId?:   string;
-      deviceKey?:   string;
-      tags?:        string[];
-      notes?:       string;
+      serviceType?:      string;
+      deviceLines?:      string;
+      addressId?:        string;
+      // requestedDevices is the current shape; deviceKey is kept for backward
+      // compatibility with payment orders created before this field existed.
+      requestedDevices?: { deviceKey: string; quantity: number }[];
+      deviceKey?:        string;
+      tags?:             string[];
+      notes?:            string;
     };
 
     const title = [meta.serviceType, meta.deviceLines].filter(Boolean).join(': ') || 'Service Visit';
@@ -466,13 +469,26 @@ export class PaymentService {
     notesParts.push(`Payment: UPI (₹${paymentOrder.amount / 100})`);
     notesParts.push(`Razorpay ID: ${razorpayPaymentId}`);
 
-    const [complaint] = await ComplaintService.createComplaint({
+    const requestedDevices = meta.requestedDevices?.length
+      ? meta.requestedDevices
+      : meta.deviceKey
+        ? [{ deviceKey: meta.deviceKey, quantity: 1 }]
+        : null;
+    if (!requestedDevices) {
+      throw new ApiError(400, 'requestedDevices is required to create a service complaint');
+    }
+
+    // Requested devices spanning multiple device-type groups become multiple
+    // complaints — one Razorpay payment still only produces one audit ledger
+    // entry, tied to the first complaint created.
+    const complaints = await ComplaintService.createComplaint({
       userId:    paymentOrder.userId,
       title,
       notes:     notesParts.join('\n'),
       addressId: meta.addressId ?? '',
-      deviceKey: meta.deviceKey,
+      requestedDevices,
     });
+    const [complaint] = complaints;
 
     // Audit-only debit entry — tracks the service fee without touching wallet balance
     const { ledger } = await WalletService.debitWallet({
@@ -482,11 +498,11 @@ export class PaymentService {
       refId:           complaint.id,
       paymentProvider: PaymentProvider.RAZORPAY,
       updateBalance:   false,
-      meta:            { razorpayPaymentId, complaintId: complaint.id },
+      meta:            { razorpayPaymentId, complaintId: complaint.id, complaintIds: complaints.map(c => c.id) },
     });
 
     logger.info('[Payment] Complaint payment fulfilled', {
-      userId: paymentOrder.userId, ledgerId: ledger.id, complaintId: complaint.id,
+      userId: paymentOrder.userId, ledgerId: ledger.id, complaintIds: complaints.map(c => c.id),
     });
 
     await Promise.allSettled([

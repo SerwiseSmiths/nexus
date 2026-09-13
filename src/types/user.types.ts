@@ -6,7 +6,10 @@ export interface UploadAvatarBody {
 }
 
 export interface UpdateSkillsBody {
-  skills: DeviceType[];
+  // Client sends device *types* (radix's per-type checkbox UI); the server
+  // resolves each to its DeviceTypeGroup and stores the group(s) as the
+  // actual skill — see UserService.updateSkills.
+  deviceTypes: DeviceType[];
 }
 
 export interface UpdateSkillsInput extends UpdateSkillsBody {
@@ -62,7 +65,7 @@ export interface CreateProviderBody {
   lastName: string;
   phoneNo: string;
   email?: string;
-  skills?: DeviceType[];
+  deviceTypes?: DeviceType[];
   currentAddress?: ProviderAddressInput;
   aadharAddress?: ProviderAddressInput;
   adminNotes?: string;
@@ -78,7 +81,7 @@ export interface UpdateProviderBody {
   lastName?: string;
   phoneNo?: string;
   email?: string;
-  skills?: DeviceType[];
+  deviceTypes?: DeviceType[];
   currentAddress?: ProviderAddressInput;
   aadharAddress?: ProviderAddressInput;
   adminNotes?: string;
