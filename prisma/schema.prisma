@@ -382,6 +382,15 @@ model Complaint {
   providerAcceptedAt  DateTime?
   rejectedProviderIds String[]  @default([])
 
+  // Job-assignment popup deferral — the full-screen "New Job" alert is only
+  // shown to a provider during business hours (9am-6pm IST). An assignment
+  // made outside that window is held here until the provider next opens the
+  // app (see ComplaintService.claimPendingAssignment); if they haven't opened
+  // it by assignmentDeadline, the sweep reassigns to a different provider
+  // (see ComplaintService.reassignExpiredPendingAssignments).
+  assignmentPending  Boolean   @default(false)
+  assignmentDeadline DateTime?
+
   // Physical entry QR (10-min expiry, provider scans on-site)
   entryQrToken     String?   @unique
   entryQrExpiresAt DateTime?
@@ -409,6 +418,7 @@ model Complaint {
   media         ComplaintMedia[]
   quote         Quote?
   notifications Notification[]
+  logs          ComplaintLog[]
 
   isDeleted Boolean  @default(false)
   createdAt DateTime @default(now())
@@ -418,6 +428,7 @@ model Complaint {
   @@index([providerId, isDeleted])
   @@index([stage])
   @@index([parentId])
+  @@index([assignmentPending, assignmentDeadline])
   @@index([entryQrToken])
   @@index([subscriptionId])
   @@index([groupId])
@@ -462,6 +473,35 @@ model ComplaintDevice {
   @@unique([complaintId, deviceId])
   @@index([complaintId])
   @@index([deviceId])
+}
+
+// Append-only audit trail of complaint updates (stage changes, provider
+// assignment/accept/reject, quotes, reopen) — each row is one dated event so
+// the admin/watchtower UI can show a real timeline instead of approximating
+// every stage's timestamp from the complaint's single `updatedAt`. Written
+// synchronously alongside the state change it records (see
+// ComplaintService.logComplaintEvent), never via the fire-and-forget `emit()`
+// helper used for notifications/realtime — a log entry must never silently
+// fail to land just because retries.
+model ComplaintLog {
+  id          String          @id @default(uuid())
+  complaintId String
+  complaint   Complaint       @relation(fields: [complaintId], references: [id])
+  // e.g. CREATED, STAGE_CHANGED, PROVIDER_ASSIGNED, PROVIDER_ACCEPTED,
+  // PROVIDER_REJECTED, QUOTE_ADDED, QUOTE_RESPONDED, REOPENED.
+  event       String
+  fromStage   ComplaintStage?
+  toStage     ComplaintStage?
+  // Who triggered this — null for system actions (auto-assign, the
+  // assignment-deadline sweep reassigning an unopened job).
+  actorId     String?
+  actorRole   Role?
+  metadata    Json?
+  isDeleted   Boolean         @default(false)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([complaintId, isDeleted])
 }
 
 model ComplaintMedia {

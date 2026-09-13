@@ -21,16 +21,18 @@ export async function seedDeviceTypeGroups() {
 
 // Full reset of every table touched by the auth, device, and complaint test
 // suites. Deletion order respects FK constraints: leaves (WalletLedger,
-// DeviceWorkHistory, Quote, ComplaintDevice) -> things that reference User
-// (RefreshToken, Wallet, ProviderProfile [cascades its skillGroups join rows],
-// Complaint [references DeviceTypeGroup]) -> Device -> DeviceTypeGroup ->
-// Address -> User. Otp is standalone. DeviceTypeGroup is re-seeded after
-// every reset so every test starts with the standard one-group-per-type set.
+// DeviceWorkHistory, Quote, ComplaintDevice, ComplaintLog) -> things that
+// reference User (RefreshToken, Wallet, ProviderProfile [cascades its
+// skillGroups join rows], Complaint [references DeviceTypeGroup]) -> Device
+// -> DeviceTypeGroup -> Address -> User. Otp is standalone. DeviceTypeGroup
+// is re-seeded after every reset so every test starts with the standard
+// one-group-per-type set.
 export async function resetAllTestTables() {
   await prisma.walletLedger.deleteMany({});
   await prisma.deviceWorkHistory.deleteMany({});
   await prisma.quote.deleteMany({});
   await prisma.complaintDevice.deleteMany({});
+  await prisma.complaintLog.deleteMany({});
   await prisma.refreshToken.deleteMany({});
   await prisma.wallet.deleteMany({});
   await prisma.providerProfile.deleteMany({});

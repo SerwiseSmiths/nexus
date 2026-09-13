@@ -94,6 +94,33 @@ router.get('/my', auth, authorize([Role.CUSTOMER]), ComplaintController.myCompla
  */
 router.get('/assigned', auth, authorize([Role.PROVIDER]), ComplaintController.assignedComplaints);
 
+/**
+ * @swagger
+ * /complaint/assignment/pending:
+ *   get:
+ *     summary: Claim every deferred job-assignment popup (PROVIDER)
+ *     description: >
+ *       The full-screen "New Job" popup only fires live between 9am-6pm IST.
+ *       An assignment made outside that window is held server-side; call
+ *       this whenever the app opens (cold start or resume) to pick up and
+ *       clear all of them (there can be more than one), so every one can be
+ *       shown immediately, queued oldest-first. If the provider never calls
+ *       this before an assignment's deadline, it's reassigned to a different
+ *       provider.
+ *     tags: [Complaint]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Pending assignments checked — `complaints` is an empty array if there's nothing to deliver
+ */
+router.get(
+  '/assignment/pending',
+  auth,
+  authorize([Role.PROVIDER]),
+  ComplaintController.pendingAssignment,
+);
+
 // ─── Single Complaint ─────────────────────────────────────────────────────────
 
 /**
@@ -242,8 +269,11 @@ router.patch(
  * @swagger
  * /complaint/{id}/quote:
  *   post:
- *     summary: Submit or replace a quote (PROVIDER)
- *     description: Automatically moves the complaint to APPROVAL stage.
+ *     summary: Submit or replace a quote (PROVIDER, or ADMIN on the assigned provider's behalf)
+ *     description: >
+ *       Automatically moves the complaint to APPROVAL stage. An ADMIN can enter a
+ *       quote from watchtower (e.g. a phoned-in estimate) — the complaint must
+ *       already have a provider assigned.
  *     tags: [Complaint]
  *     security:
  *       - bearerAuth: []
@@ -261,14 +291,20 @@ router.patch(
  *                 type: array
  *                 items:
  *                   type: object
+ *                   required: [name, unitPrice]
  *                   properties:
- *                     description: { type: string }
- *                     amount:      { type: number }
+ *                     name:      { type: string }
+ *                     unitPrice: { type: number }
+ *                     quantity:  { type: integer, default: 1 }
+ *                     partId:    { type: string, description: "Strapi service-part documentId — when set, name/unitPrice are re-resolved from the CMS unless priceOverridden is true" }
+ *                     priceOverridden: { type: boolean, description: "Only meaningful with partId set — trusts this item's unitPrice verbatim instead of re-resolving it from the CMS (e.g. the real cost ran higher than the listed price)" }
  *               notes: { type: string }
  *     responses:
  *       201: { description: Quote submitted }
+ *       400: { description: Not yet eligible for a quote, or no provider assigned (ADMIN) }
+ *       404: { description: Complaint not found or not assigned to you }
  */
-router.post('/:id/quote', auth, authorize([Role.PROVIDER]), ComplaintController.addQuote);
+router.post('/:id/quote', auth, authorize([Role.PROVIDER, Role.ADMIN]), ComplaintController.addQuote);
 
 /**
  * @swagger

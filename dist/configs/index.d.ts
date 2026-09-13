@@ -1,11 +1,46 @@
-export declare const config: {
-    env: "development" | "production" | "test";
-    port: number;
-    logLevel: "error" | "warn" | "info" | "http" | "debug";
-    cors: {
-        origin: string;
-    };
-    jwt: {
-        secret: string;
-    };
-};
+import { z } from 'zod';
+declare const envSchema: z.ZodObject<{
+    NODE_ENV: z.ZodDefault<z.ZodEnum<{
+        local: "local";
+        development: "development";
+        production: "production";
+        test: "test";
+    }>>;
+    PORT: z.ZodDefault<z.ZodPipe<z.ZodString, z.ZodTransform<number, string>>>;
+    LOG_LEVEL: z.ZodDefault<z.ZodEnum<{
+        info: "info";
+        error: "error";
+        warn: "warn";
+        http: "http";
+        debug: "debug";
+    }>>;
+    DATABASE_URL: z.ZodString;
+    DIRECT_URL: z.ZodOptional<z.ZodString>;
+    CORS_ORIGIN: z.ZodDefault<z.ZodString>;
+    JWT_SECRET: z.ZodString;
+    JWT_ACCESS_EXPIRY: z.ZodDefault<z.ZodString>;
+    JWT_REFRESH_EXPIRY: z.ZodDefault<z.ZodString>;
+    HANUOTP_API_KEY: z.ZodOptional<z.ZodString>;
+    HANUOTP_TEMPLATE_SID: z.ZodDefault<z.ZodString>;
+    CLOUDINARY_CLOUD_NAME: z.ZodString;
+    CLOUDINARY_API_KEY: z.ZodString;
+    CLOUDINARY_API_SECRET: z.ZodString;
+    OLA_MAPS_API_KEY: z.ZodString;
+    SUPABASE_URL: z.ZodString;
+    SUPABASE_SERVICE_ROLE_KEY: z.ZodString;
+    STRAPI_URL: z.ZodDefault<z.ZodString>;
+    STRAPI_API_TOKEN: z.ZodOptional<z.ZodString>;
+    CACHE_TTL_SECONDS: z.ZodDefault<z.ZodPipe<z.ZodString, z.ZodTransform<number, string>>>;
+    RAZORPAY_KEY_ID: z.ZodOptional<z.ZodString>;
+    RAZORPAY_KEY_SECRET: z.ZodOptional<z.ZodString>;
+    RAZORPAY_WEBHOOK_SECRET: z.ZodOptional<z.ZodString>;
+    APP_URL: z.ZodOptional<z.ZodString>;
+    RADIX_OTA_DEPLOY_API_KEY: z.ZodString;
+    SERWISE_OTA_DEPLOY_API_KEY: z.ZodString;
+    OTA_MIN_BUNDLE_DATE: z.ZodDefault<z.ZodString>;
+}, z.core.$strip>;
+export type Config = z.infer<typeof envSchema>;
+declare let config: any;
+export declare const initializeConfig: () => Promise<any>;
+export { config };
+export declare const startConfigPolling: () => void;

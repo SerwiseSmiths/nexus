@@ -141,11 +141,16 @@ export class RealtimeService {
     ]);
   }
 
-  static async emitProviderAssigned(complaint: BroadcastPayload): Promise<void> {
+  // notifyProvider is false when the assignment lands outside the 9am-6pm
+  // business-hours window — the customer-facing event still fires, but the
+  // provider's own `complaint:assigned` channel (which drives the full-screen
+  // popup in radix) is held back until ComplaintService.claimPendingAssignment
+  // delivers it once the provider next opens the app.
+  static async emitProviderAssigned(complaint: BroadcastPayload, notifyProvider = true): Promise<void> {
     const payload = { complaint };
     await Promise.allSettled([
       this.emitToUser(complaint.userId as string, 'complaint:provider_assigned', payload),
-      complaint.providerId
+      complaint.providerId && notifyProvider
         ? this.emitToProvider(complaint.providerId as string, 'complaint:assigned', payload)
         : Promise.resolve(),
     ]);

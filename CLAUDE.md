@@ -54,3 +54,11 @@ throw new ApiError(404, 'Not found');
 ApiResponse.success('message', data)   // → { statusCode, success: true, message, data }
 // Errors handled automatically by errorHandler middleware
 ```
+
+### Living feature docs (`docs/*.md`)
+Before touching `auth`, `device`, or `complaint` code, read the matching doc in `docs/` (`authentication.md`, `device.md`, `complaint.md`) — they track known gaps, fixed bugs, the full endpoint/state-machine reference, and a change log for that module. Update the relevant doc's Change Log + Known Gaps sections whenever you ship a feature or fix a bug in that module — these are meant to stay current, not be written once and abandoned.
+
+### Established patterns worth reusing
+- **Audit trail on a mutation**: if a feature needs a dated history of what happened (see `complaint.md` §6.5's `ComplaintLog`), write the log row **synchronously, inline**, never via the fire-and-forget `emit()` helper used for notifications/realtime — a log entry recording a state change is part of that change, not a best-effort side effect safe to drop.
+- **Snapshotting externally-editable data (CMS prices, etc.) at creation time**: re-resolve the current value from its source of truth at the moment of creation and write the resolved value into the row being created (plain `Json`/scalar column) — never a live reference/foreign lookup a later read would have to re-resolve. See `complaint.md` §6.2 (`addQuote`'s CMS price snapshot) for the concrete pattern, including how to still allow an explicit manual override (§6.3) without reopening the whole guarantee.
+- **A background sweep that mutates rows another request-path can also mutate concurrently**: gate the sweep's actual write with the same condition its initial read used (e.g. `updateMany({ where: { id, <still-true-flag>: true }, ... })`, check the returned count), not just the read — otherwise the sweep can silently clobber a change a concurrent request just made. See `complaint.md` §5.1's assignment-deadline sweep.

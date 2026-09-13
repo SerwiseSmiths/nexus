@@ -4,11 +4,13 @@ import { config, initializeConfig, startConfigPolling } from '@/configs';
 import { initializeCloudinary } from '@/configs/cloudinary.config';
 import { logger } from '@/utils/logger';
 import { StrapiService } from '@/services/strapi.service';
+import { startAssignmentDeadlineSweep } from '@/jobs/assignmentDeadlineSweep';
 
 const startServer = async () => {
   try {
     await initializeConfig();
     startConfigPolling();
+    startAssignmentDeadlineSweep();
     initializeCloudinary();
 
     const server = app.listen(config.port, () => {

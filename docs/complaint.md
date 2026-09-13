@@ -1,8 +1,8 @@
 # Complaint Module — Feature Reference
 
-Living reference for the service-request lifecycle — creation, provider matching, on-site QR entry, quoting, payment, and reopening — shared by **serwise** (customer) and **radix** (provider). Read this before touching complaint code; same purpose as `docs/authentication.md` and `docs/device.md`.
+Living reference for the service-request lifecycle — creation, provider matching, on-site QR entry, quoting, payment, and reopening — shared by **serwise** (customer), **radix** (provider), and **watchtower** (admin). Read this before touching complaint code; same purpose as `docs/authentication.md` and `docs/device.md`.
 
-Last verified against the codebase: 2026-09-12.
+Last verified against the codebase: 2026-09-13.
 
 ---
 
@@ -10,10 +10,12 @@ Last verified against the codebase: 2026-09-12.
 
 A **`Complaint`** is a single service ticket. It moves through a fixed 6-stage state machine, optionally references a `Device`, always references an `Address`, and gets assigned to a `Provider` (auto-matched or admin-assigned). Quotes, entry QR tokens, payment, and a reopen chain all hang off this one model.
 
-Two distinct actor surfaces:
+Three distinct actor surfaces:
 - **Customer** (serwise): creates complaints, generates entry QR, responds to quotes, can reopen a closed complaint.
-- **Provider** (radix): accepts/rejects assignment, validates entry QR, submits quotes, links a device, completes payment.
-- **Admin** (watchtower): full visibility, manual assignment, can act on a customer's behalf (`asAdmin`) for quote response and reopen.
+- **Provider** (radix): accepts/rejects assignment, validates entry QR, submits quotes, links a device, completes payment. Only sees the full-screen job-assignment popup live during 9am-6pm IST (see §5.1); claims any held-back ones on app open.
+- **Admin** (watchtower): full visibility, manual assignment, can act on a customer's behalf (`asAdmin`) for quote response and reopen, and (added 2026-09-13) can enter a quote on the assigned provider's behalf (`asAdmin` on `addQuote` too — see §6).
+
+Every complaint carries a dated audit trail (`ComplaintLog`, see §6.5) of every stage change, assignment, and quote event — added 2026-09-13, surfaced in watchtower's ticket detail "Ticket Activity" tab.
 
 ---
 
@@ -52,13 +54,14 @@ Mounted at `/api/complaint` (singular — not `/complaints`). All in `src/routes
 | `GET /` | `auth`, `[ADMIN]` | `listComplaints` |
 | `GET /my` | `auth`, `[CUSTOMER]` | `myComplaints` |
 | `GET /assigned` | `auth`, `[PROVIDER]` | `assignedComplaints` |
+| `GET /assignment/pending` | `auth`, `[PROVIDER]` | `pendingAssignment` — claims every deferred job-assignment popup (added 2026-09-13, see §5.1) |
 | `GET /:id` | `auth` only — ownership checked in-service | `getComplaint` |
 | `DELETE /:id` | `auth` only — ownership checked in-service | `deleteComplaint` |
 | `PATCH /:id/stage` | `auth`, `[PROVIDER, ADMIN]` | `updateStage` |
 | `PATCH /:id/assign` | `auth`, `[ADMIN]` | `assignProvider` |
 | `PATCH /:id/accept` | `auth`, `[PROVIDER]` | `acceptAssignment` |
 | `PATCH /:id/reject-assignment` | `auth`, `[PROVIDER]` | `rejectAssignment` |
-| `POST /:id/quote` | `auth`, `[PROVIDER]` | `addQuote` |
+| `POST /:id/quote` | `auth`, `[PROVIDER, ADMIN]` (ADMIN added 2026-09-13) | `addQuote` |
 | `PATCH /:id/quote/respond` | `auth`, `[CUSTOMER, ADMIN]` | `respondToQuote` |
 | `PATCH /:id/device` | `auth`, `[CUSTOMER, PROVIDER, ADMIN]` | `linkDevice` |
 | `PATCH /:id/complete-payment` | `auth`, `[PROVIDER]` | `completePayment` |
@@ -95,18 +98,55 @@ Every provider-scoped service method filters its `findFirst` by `providerId`, re
 
 If you add a third path that creates or re-queues a complaint, check whether it needs the same `emit(() => ComplaintService.autoAssignProvider(...))` call — this bug shape has now appeared twice.
 
-`assignProvider` (admin, manual) blocks assigning to a `COMPLETED`/`REJECTED` complaint (400) and resets `providerAccepted`. `acceptAssignment` 400s on double-accept. Both are `providerId`-scoped, 404 for a non-assigned provider.
+`assignProvider` (admin, manual) blocks assigning to a `COMPLETED`/`REJECTED` complaint (400) and resets `providerAccepted`. `acceptAssignment` 400s on double-accept. Both are `providerId`-scoped, 404 for a non-assigned provider. `assignProvider`'s `AssignProviderInput` optionally carries `actorId`/`actorRole` (added 2026-09-13) — the admin route passes the caller's own id/role; `autoAssignProvider`'s system-triggered calls leave both unset, recorded as `null` on the audit log (§6.5).
+
+### 5.1 Business-hours job-assignment popup (added 2026-09-13)
+
+The full-screen "New Job" popup in radix is only allowed to fire **live** between **9am-6pm IST** (`isWithinBusinessHours`, `service.ts` — IST is a fixed UTC+5:30 offset, computed by shifting the `Date` and reading UTC getters back off it, no timezone-database dependency). This applies to every path that reaches `assignProvider` — manual admin assignment, `autoAssignProvider` (on create/reject/reopen), and the sweep's own reassignment.
+
+- **Inside the window**: unchanged from before this date — the provider-facing FCM push (`dataOnly`, `metadata.event: 'complaint_assigned'`) and the realtime `complaint:assigned` broadcast both fire immediately.
+- **Outside the window**: `Complaint.assignmentPending = true` and `Complaint.assignmentDeadline` is set to **6pm IST the next calendar day** (`nextAssignmentDeadline`). The provider-facing push/realtime are *not* sent — `RealtimeService.emitProviderAssigned(complaint, notifyProvider)`'s second arg gates this; the customer-facing `complaint:provider_assigned` event is unaffected either way.
+- **Claiming**: `GET /complaint/assignment/pending` (`ComplaintService.claimPendingAssignments`) — called by radix on app cold-start and every foreground resume. Claims **all** of a provider's deferred assignments in one call (not just the oldest), clears `assignmentPending`/`assignmentDeadline` on each, logs `ASSIGNMENT_POPUP_DELIVERED` per complaint, and returns the full list in the REST response so radix can queue and show every popup in turn. Deliberately does **not** also emit realtime/push here — the REST response *is* the delivery; emitting both was found to double-trigger the popup (the realtime channel is already connected by the time the REST call resolves).
+- **Reassignment sweep**: `ComplaintService.reassignExpiredPendingAssignments` (`src/jobs/assignmentDeadlineSweep.ts`, `setInterval` every 5 minutes, started in `server.ts`) reassigns any complaint whose `assignmentDeadline` has passed with `assignmentPending` still `true` — same `rejectedProviderIds`-exclusion + `autoAssignProvider` re-run as `rejectAssignment`. **Concurrency-safe by construction**: the actual reassignment write is a `updateMany` gated on `assignmentPending: true` still being true at write time (not just at the initial read), so a provider who claims their popup in the same instant the sweep decides to reassign it can't be yanked off the job it just showed them — the sweep's write becomes a no-op (`count === 0`, skipped) instead.
 
 ---
 
 ## 6. Quote Flow
 
-`Quote` is 1:1 with `Complaint` (unique `complaintId`). `addQuote` (assigned provider only, must be `QR_VALIDATED`/`ESTIMATION`) upserts the quote, computes `totalAmount` from line items, force-advances the complaint to `APPROVAL`.
+`Quote` is 1:1 with `Complaint` (unique `complaintId`). `addQuote` (assigned provider, **or ADMIN acting on the provider's behalf — added 2026-09-13, see §6.1**; must be `QR_VALIDATED`/`ESTIMATION`) upserts the quote, computes `totalAmount` from line items, force-advances the complaint to `APPROVAL`.
 
 `respondToQuote` (customer, or admin via `asAdmin`):
 - **Approve, non-zero total** → `PAYMENT`.
 - **Approve, zero total** → straight to `COMPLETED`, skipping the payment step entirely (free jobs never touch wallet logic), and records a device work-history entry.
 - **Reject** → `REJECTED`, quote marked `REJECTED`, `rejectionReason`/`rejectedAt`/`rejectedBy` recorded.
+
+### 6.1 ADMIN can submit a quote too (added 2026-09-13)
+
+`AddQuoteInput` gained `requesterId` (replacing the old `providerId`-only shape) and `asAdmin`. When `asAdmin` is true: the ownership filter (`providerId: requesterId`) is skipped, but the complaint **must already have a provider assigned** (400 `"Assign a provider before adding a quote"` otherwise) — a quote is inherently that provider's estimate, an admin is only transcribing it (e.g. a phoned-in estimate) from watchtower's new "Create Quote" UI (`watchtower/src/app/tickets/AddQuoteForm.tsx`).
+
+### 6.2 CMS price snapshot (added 2026-09-13)
+
+Each quote line item may carry a `partId` (Strapi `service-part` `documentId`, from the CMS parts/repairs/service catalogue — `watchtower/src/lib/nexus/parts.ts`'s picker, or radix's own `QuoteCreationScreen`). For every item with a `partId`, `addQuote` re-resolves `name`/`unitPrice` from **the live CMS right now** (`StrapiService.fetchPartByDocumentId`) and **ignores whatever the client sent** for those two fields — the client's number may have come from a stale local read. The resolved value is written into `Quote.items` (plain `Json`), which is a **permanent snapshot** from that point on: nothing downstream (payouts, `respondToQuote`, watchtower's display) ever re-reads the CMS, so a later CMS price edit can never retroactively change an already-created quote's total.
+
+Custom items (no `partId` — e.g. ad-hoc labor charges typed directly by the provider/admin) are never touched by this and always use exactly what was submitted.
+
+**Known caveat**: `fetchPartByDocumentId` is cached up to `CACHE_TTL_SECONDS` (default 300s) unless watchtower's CMS-write path explicitly invalidates the `SERVICE_PARTS` cache tag on every edit (`cache.service.ts`) — if that invalidation call is ever missed, a just-made price edit can take up to that TTL to be reflected in new quotes. Also: `ServicePartTierPricing` (per-provider-tier price overrides, watchtower-managed) is **not** consulted here or anywhere else in the quote flow today — only the part's base `face_value` is used, a pre-existing gap this feature didn't introduce.
+
+### 6.3 `priceOverridden` — manual price backup (added 2026-09-13)
+
+Per-item `priceOverridden: boolean` on `AddQuoteSchema` — only meaningful alongside `partId`. When `true`, `addQuote` trusts the client's `unitPrice` verbatim instead of re-resolving it from the CMS, for the case where the real cost ran higher than the catalogue's listed price. Watchtower's quote form exposes this as an "Actual cost is higher? Enter a custom price" toggle per catalogue line item — off by default (CMS-controlled, non-editable), on turns that one item's price field editable.
+
+### 6.4 Confirmation preview before submit (watchtower-only, added 2026-09-13)
+
+Watchtower's `AddQuoteForm` doesn't submit directly — clicking "Submit Quote" first re-fetches each catalogue item's *current* price (`GET /parts/:documentId`, a fresh un-cached-on-watchtower's-end read) and shows a confirmation popup with the recalculated total before anything is sent, flagging any item whose price moved since it was added. This narrows (but, being a client-side check, can never fully close) the staleness window between "admin opens the form" and "admin hits submit" — `addQuote`'s own CMS resolution at the moment of the real submit (§6.2) remains the actual source of truth regardless of what this preview showed.
+
+### 6.5 Complaint audit log (`ComplaintLog`, added 2026-09-13)
+
+Every meaningful complaint mutation writes one row to `ComplaintLog` (`complaintId`, `event`, `fromStage`/`toStage`, `actorId`/`actorRole` — `null` for system actions, `metadata` Json, `createdAt`) via `logComplaintEvent` — always awaited inline, **never** via the fire-and-forget `emit()` helper used for notifications/realtime, since a log entry recording what happened is part of the state change itself, not a best-effort side effect. Events written today: `CREATED`, `STAGE_CHANGED` (from `updateStage`, `validateEntryQr`, `completeService`, `completePayment`), `PROVIDER_ASSIGNED`, `PROVIDER_ACCEPTED`, `PROVIDER_REJECTED`, `QUOTE_ADDED`, `QUOTE_APPROVED`, `QUOTE_REJECTED`, `REOPENED`, `ASSIGNMENT_POPUP_DELIVERED`, `ASSIGNMENT_EXPIRED_REASSIGNING` (§5.1).
+
+`COMPLAINT_INCLUDE.logs` (ordered oldest-first) means every complaint read (list or detail) already carries its full timeline — no separate endpoint. Watchtower's ticket detail "Ticket Activity" tab reads real per-event timestamps off this instead of approximating every stage's date from the complaint's single `updatedAt`.
+
+**Known gap**: `logComplaintEvent` swallows its own errors (logged, never thrown) so a rare DB hiccup on the log write never fails the underlying request — but that also means the log isn't 100%-guaranteed-complete; a failed log write is invisible except in nexus's own logs.
 
 ---
 
@@ -169,6 +209,12 @@ Several schema fields had **no custom message at all** before this pass and woul
 - [ ] **No session/idempotency key on mutation endpoints** — a double-tap on `complete-payment` or `accept` relies entirely on the stage guard (e.g. "must be in PAYMENT") to reject the second call, not an explicit idempotency mechanism. Works today because stage transitions are one-directional, but worth knowing if any endpoint's guard is ever loosened.
 - [ ] **`autoAssignProvider`'s matching is "fewest active complaints," nothing more** — no geography, no rating, no provider tier weighting. Fine for current scale; revisit if provider-side complaints about assignment fairness ever come up.
 
+### 11.3 Business-hours assignment + quote CMS-snapshot (added 2026-09-13)
+- [ ] **Only radix's active foreground transitions trigger a pending-assignment check** — if the provider's app is already in the foreground and simply stays there (never backgrounds/resumes) after a deferred assignment lands, nothing proactively re-polls; the next `AppState` 'active' transition or the sweep's deadline (whichever comes first) is what eventually surfaces or reassigns it.
+- [ ] **Overlapping sweep ticks aren't guarded.** `setInterval` fires every 5 minutes regardless of whether the previous `reassignExpiredPendingAssignments()` run finished — at meaningfully higher complaint volume than today's, two overlapping runs could both pick up the same complaint (the per-row `updateMany` guard, §5.1, prevents a *double* reassignment, but not redundant work). No mutex/lock exists.
+- [ ] **CMS lookup fallback on a deleted/renamed part silently keeps the client's value.** If `fetchPartByDocumentId` 404s (the part was removed/unpublished between the client reading it and submitting), `addQuote` falls back to the client-submitted `name`/`unitPrice` instead of erroring — trades a hard failure for quietly weakening the "server always resolves the true price" guarantee in that one edge case.
+- [ ] **No automated test coverage** for `assignProvider`'s business-hours branch, `claimPendingAssignments`, `reassignExpiredPendingAssignments`, `ComplaintLog` writes, or the CMS price-snapshot/`priceOverridden` logic in `addQuote` — everything in §5.1 and §6.1-6.5 was verified by manual code review only, not by a test file. `provider-assignment.test.ts` still passes because none of its assertions depend on time-of-day or exercise the new fields.
+
 ---
 
 ## 12. Testing
@@ -204,19 +250,30 @@ Realtime/Notification/Telegram services are mocked in every complaint test file 
 ```
 src/routes/complaint.route.ts           — route definitions + Swagger JSDoc (stage-transition doc fixed 2026-09-12)
 src/controllers/complaint.controller.ts — HTTP layer, Zod validation via describeZodError
-src/services/complaint.service.ts       — all business logic: state machine, assignment, quotes, payment, QR, reopen
+src/services/complaint.service.ts       — all business logic: state machine, assignment, quotes, payment, QR, reopen,
+                                           business-hours deferral (§5.1), CMS price snapshot (§6.2), audit log (§6.5)
 src/services/wallet.service.ts          — debitCustomerForComplaintPayment (added 2026-09-12), creditProviderEarnings
+src/services/strapi.service.ts          — fetchPartByDocumentId, used by addQuote's CMS price snapshot (§6.2)
+src/services/realtime.service.ts        — emitProviderAssigned's notifyProvider gate (§5.1)
+src/jobs/assignmentDeadlineSweep.ts     — 5-minute setInterval driving reassignExpiredPendingAssignments (§5.1)
 src/types/complaint.types.ts            — Zod schemas (all fields now have user-facing messages) + input/body types
 src/utils/zodError.ts                   — describeZodError, shared with device.service.ts
-prisma/schema.prisma                    — Complaint / Quote models
+prisma/schema.prisma                    — Complaint / Quote / ComplaintLog (§6.5) models
 docs/complaint.md                       — this file
-src/tests/complaint/*.test.ts           — test suites (see §12.2)
+src/tests/complaint/*.test.ts           — test suites (see §12.2 — does NOT yet cover §5.1/§6.1-6.5, see §11.3)
 src/tests/complaint/fixtures.ts         — complaint-specific test fixtures
-src/tests/dbHelpers.ts                  — resetAllTestTables, extended for Quote/ProviderProfile
+src/tests/dbHelpers.ts                  — resetAllTestTables, extended for Quote/ProviderProfile/ComplaintLog
 ```
 
 ---
 
 ## 14. Change Log
+
+- **2026-09-13** — Business hours + quote/CMS/audit-log pass:
+  - Added `assignmentPending`/`assignmentDeadline` to `Complaint`, gating the provider-facing job-assignment popup to 9am-6pm IST (§5.1). New `GET /complaint/assignment/pending` claims all deferred assignments for a provider in one call. New 5-minute sweep (`src/jobs/assignmentDeadlineSweep.ts`) reassigns unclaimed deferred assignments past their deadline, with a `updateMany`-guarded write closing a real race against a provider claiming their popup at the same instant.
+  - Added `ComplaintLog` model + `logComplaintEvent` — a dated audit trail on every stage change, assignment, and quote event (§6.5), included on every complaint read via `COMPLAINT_INCLUDE.logs`.
+  - `addQuote` now accepts ADMIN (previously PROVIDER-only) acting on the assigned provider's behalf (§6.1); catalogue-linked items (`partId` set) have their name/price re-resolved from the live CMS at submit time regardless of what the client sent, a permanent one-time snapshot immune to later CMS price edits (§6.2); `priceOverridden` lets an admin explicitly override that with a manual price for the "actual cost ran higher" case (§6.3).
+  - `DeviceTypeGroup` gained a stable, auto-generated `key` slug — every external consumer (watchtower, radix, serwise) now references a group by `key`, never by its internal DB `id` (unrelated to the above, same session).
+  - New known gaps recorded in §11.3 (no test coverage yet for any of the above, overlapping-sweep-tick risk, CMS-lookup-404 fallback, foreground-only pending-assignment triggering).
 
 - **2026-09-12** — Initial hardening pass: fixed the multi-device partial-creation bug (now atomic), added real WALLET balance verification to `completePayment` (previously zero verification existed), fixed two instances of "notification promises auto-reassignment but never triggers it" (`rejectAssignment`, `reopenComplaint`), fixed a genuine authorization hole in `updateStage` (no ownership check at all), standardized 403→404 for all "not your complaint" cases, corrected the `APPROVAL→ESTIMATION` Swagger doc mismatch, extracted and applied `describeZodError` to all 9 validated endpoints, and added real user-facing messages to every previously-unmessaged Zod field. Wrote 76 tests (192 total across the suite), wrote this doc.

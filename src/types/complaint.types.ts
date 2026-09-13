@@ -39,6 +39,11 @@ export const AddQuoteSchema = z.object({
     name:      z.string().min(1, 'Item name is required'),
     unitPrice: z.number().min(0, 'Unit price cannot be negative'),
     quantity:  z.number().int().min(1, 'Quantity must be at least 1').default(1),
+    // For a catalogue item (partId set): overrides the CMS price with this
+    // exact value instead of re-resolving it from the CMS — a manual backup
+    // for when the real cost ran higher than the listed catalogue price.
+    // Ignored for a custom item (no partId), which is always admin-priced.
+    priceOverridden: z.boolean().optional(),
   })).min(1, 'At least one item is required'),
   notes: z.string().optional(),
 });
@@ -125,11 +130,24 @@ export interface UpdateStageInput extends UpdateStageDto {
 
 export interface AssignProviderInput extends AssignProviderDto {
   complaintId: string;
+  // Who triggered this assignment — an admin via the API, or omitted when
+  // the system auto-assigned (createComplaint, rejectAssignment's
+  // reassignment, the assignment-deadline sweep). Recorded on the
+  // complaint's audit log (see ComplaintService.logComplaintEvent).
+  actorId?:   string;
+  actorRole?: Role;
 }
 
 export interface AddQuoteInput extends AddQuoteDto {
   complaintId: string;
-  providerId:  string;
+  // The provider's own id, or the admin's id when submitting on the
+  // provider's behalf from watchtower (see `asAdmin`).
+  requesterId: string;
+  // True when an ADMIN is entering the quote on the assigned provider's
+  // behalf from watchtower — skips the providerId ownership filter (an
+  // admin isn't the complaint's provider) but still requires a provider to
+  // already be assigned, since a quote is inherently that provider's estimate.
+  asAdmin?: boolean;
 }
 
 export interface RespondToQuoteInput extends RespondToQuoteDto {

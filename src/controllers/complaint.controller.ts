@@ -70,6 +70,15 @@ export class ComplaintController {
     }
   }
 
+  static async pendingAssignment(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const complaints = await ComplaintService.claimPendingAssignments(req.user!.id);
+      return ApiResponse.success(res, 200, 'Pending assignments checked', { complaints });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async getComplaint(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const id = req.params.id as string;
@@ -119,6 +128,8 @@ export class ComplaintController {
 
       const complaint = await ComplaintService.assignProvider({
         complaintId: req.params.id as string,
+        actorId:     req.user!.id,
+        actorRole:   req.user!.role,
         ...parsed.data,
       });
 
@@ -155,7 +166,8 @@ export class ComplaintController {
 
       const result = await ComplaintService.addQuote({
         complaintId: req.params.id as string,
-        providerId:  req.user!.id,
+        requesterId: req.user!.id,
+        asAdmin:     req.user!.role === Role.ADMIN,
         ...parsed.data,
       });
 

@@ -8,6 +8,7 @@ import { RealtimeService } from '@/services/realtime.service';
 import { NotificationService } from '@/services/notification.service';
 import { TelegramService } from '@/services/telegram.service';
 import { WalletService } from '@/services/wallet.service';
+import { StrapiService } from '@/services/strapi.service';
 import { DeviceTypeGroupService } from '@/services/device-type-group.service';
 import { DEVICE_KEY_TO_TYPE, DEVICE_META_VALIDATORS, type DeviceKey } from '@/types/device.types';
 import type {
@@ -51,6 +52,12 @@ const COMPLAINT_INCLUDE = {
     orderBy: { createdAt: 'asc' as const },
   },
   quote: true,
+  // Dated timeline of every stage change / assignment / quote event — see
+  // ComplaintService.logComplaintEvent.
+  logs: {
+    where:   { isDeleted: false },
+    orderBy: { createdAt: 'asc' as const },
+  },
 } satisfies Prisma.ComplaintInclude;
 
 type ComplaintWithRelations = Prisma.ComplaintGetPayload<{ include: typeof COMPLAINT_INCLUDE }>;
@@ -117,8 +124,72 @@ function generateQrExpiry(): Date {
   return d;
 }
 
+// ---------------------------------------------------------------------------
+// Job-assignment business hours (9am-6pm IST) — the full-screen "New Job"
+// popup is only shown to a provider inside this window. IST has a fixed
+// UTC+5:30 offset (no DST), so shifting by a constant ms value and reading
+// the UTC getters back off the shifted Date gives IST wall-clock components
+// without needing Intl/timezone-database parsing.
+// ---------------------------------------------------------------------------
+
+const BUSINESS_HOURS_START = 9;
+const BUSINESS_HOURS_END = 18;
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+function istParts(date: Date): { year: number; month: number; day: number; hour: number } {
+  const shifted = new Date(date.getTime() + IST_OFFSET_MS);
+  return {
+    year:  shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth(),
+    day:   shifted.getUTCDate(),
+    hour:  shifted.getUTCHours(),
+  };
+}
+
+function isWithinBusinessHours(date: Date = new Date()): boolean {
+  const { hour } = istParts(date);
+  return hour >= BUSINESS_HOURS_START && hour < BUSINESS_HOURS_END;
+}
+
+// Deadline for a provider to open the app and see a deferred assignment
+// popup before it's handed to a different provider — end of the next
+// calendar day's business window (IST), giving them a full day to check in.
+function nextAssignmentDeadline(date: Date = new Date()): Date {
+  const { year, month, day } = istParts(date);
+  return new Date(Date.UTC(year, month, day + 1, BUSINESS_HOURS_END, 0) - IST_OFFSET_MS);
+}
+
 function emit(fn: () => Promise<unknown>): void {
   fn().catch((err) => logger.error('[Complaint] Background task failed:', err));
+}
+
+// Writes one row to the complaint's audit timeline. Always awaited inline
+// (never via `emit()`) — a log entry recording what happened is part of the
+// state change itself, not a best-effort side effect that's fine to lose.
+async function logComplaintEvent(params: {
+  complaintId: string;
+  event: string;
+  fromStage?: ComplaintStage | null;
+  toStage?: ComplaintStage | null;
+  actorId?: string | null;
+  actorRole?: Role | null;
+  metadata?: Prisma.InputJsonValue;
+}): Promise<void> {
+  try {
+    await prisma.complaintLog.create({
+      data: {
+        complaintId: params.complaintId,
+        event:       params.event,
+        fromStage:   params.fromStage ?? null,
+        toStage:     params.toStage ?? null,
+        actorId:     params.actorId ?? null,
+        actorRole:   params.actorRole ?? null,
+        metadata:    params.metadata,
+      },
+    });
+  } catch (err) {
+    logger.error('[Complaint] Failed to write complaint log:', err, params);
+  }
 }
 
 // A quote is treated as a filter change if any line item name mentions "filter" —
@@ -191,6 +262,12 @@ export class ComplaintService {
 
     // Side effects only fire once the whole batch is durably committed.
     for (const complaint of complaints) {
+      await logComplaintEvent({
+        complaintId: complaint.id,
+        event:       'CREATED',
+        toStage:     ComplaintStage.ENTRANCE,
+        actorId:     userId,
+      });
       emit(() => RealtimeService.emitComplaintCreated(complaint as unknown as Record<string, unknown>));
       emit(() =>
         NotificationService.sendToUser({
@@ -361,6 +438,16 @@ export class ComplaintService {
       include: COMPLAINT_INCLUDE,
     });
 
+    await logComplaintEvent({
+      complaintId,
+      event: 'STAGE_CHANGED',
+      fromStage: oldStage,
+      toStage: stage,
+      actorId: updatedById,
+      actorRole: requesterRole,
+      ...(stage === ComplaintStage.REJECTED && rejectionReason && { metadata: { rejectionReason } }),
+    });
+
     emit(() =>
       RealtimeService.emitStageChanged(
         updated as unknown as Record<string, unknown>,
@@ -389,7 +476,7 @@ export class ComplaintService {
 
   // ─── Provider Assignment ──────────────────────────────────────────────────
 
-  static async assignProvider({ complaintId, providerId }: AssignProviderInput) {
+  static async assignProvider({ complaintId, providerId, actorId, actorRole }: AssignProviderInput) {
     const complaint = await prisma.complaint.findFirst({
       where: { id: complaintId, isDeleted: false },
     });
@@ -404,32 +491,50 @@ export class ComplaintService {
     });
     if (!provider) throw new ApiError(404, 'Provider not found');
 
+    const now = new Date();
+    const withinHours = isWithinBusinessHours(now);
+
     const updated = await prisma.complaint.update({
       where: { id: complaintId },
       data: {
         providerId,
         providerAccepted:   false,
         providerAcceptedAt: null,
+        // Outside 9am-6pm IST, hold the job-assignment popup until the
+        // provider next opens the app (claimPendingAssignment) instead of
+        // alerting them immediately.
+        assignmentPending:  !withinHours,
+        assignmentDeadline: withinHours ? null : nextAssignmentDeadline(now),
       },
       include: COMPLAINT_INCLUDE,
     });
 
+    await logComplaintEvent({
+      complaintId,
+      event: 'PROVIDER_ASSIGNED',
+      actorId: actorId ?? null,
+      actorRole: actorRole ?? null,
+      metadata: { providerId, withinBusinessHours: withinHours },
+    });
+
     emit(() =>
-      RealtimeService.emitProviderAssigned(updated as unknown as Record<string, unknown>),
+      RealtimeService.emitProviderAssigned(updated as unknown as Record<string, unknown>, withinHours),
     );
-    emit(() =>
-      NotificationService.sendToUser({
-        userId:      providerId,
-        title:       'New Job Assigned',
-        body:        `You have been assigned a new service complaint: "${complaint.title}"`,
-        type:        NotificationType.COMPLAINT,
-        complaintId,
-        // Data-only — lets the provider app show a full-screen incoming-job
-        // popup even when backgrounded/locked, instead of a plain tray notification.
-        dataOnly:    true,
-        metadata:    { event: 'complaint_assigned' },
-      }),
-    );
+    if (withinHours) {
+      emit(() =>
+        NotificationService.sendToUser({
+          userId:      providerId,
+          title:       'New Job Assigned',
+          body:        `You have been assigned a new service complaint: "${complaint.title}"`,
+          type:        NotificationType.COMPLAINT,
+          complaintId,
+          // Data-only — lets the provider app show a full-screen incoming-job
+          // popup even when backgrounded/locked, instead of a plain tray notification.
+          dataOnly:    true,
+          metadata:    { event: 'complaint_assigned' },
+        }),
+      );
+    }
     emit(() =>
       NotificationService.sendToUser({
         userId:      complaint.userId,
@@ -441,6 +546,96 @@ export class ComplaintService {
     );
 
     return updated;
+  }
+
+  // Called when a provider's app opens (splash / cold start / resume) —
+  // delivers every job-assignment popup that was deferred because it landed
+  // outside business hours (there can be more than one), and clears each
+  // deferral so the deadline sweep (see reassignExpiredPendingAssignments)
+  // leaves them alone. Returns the complaints directly so the caller can
+  // show all of them (queued one after another) immediately, rather than
+  // waiting on a push/realtime round trip — no realtime/push emit here,
+  // since this REST response is itself the delivery.
+  static async claimPendingAssignments(providerId: string): Promise<ComplaintWithRelations[]> {
+    const complaints = await prisma.complaint.findMany({
+      where: {
+        providerId,
+        assignmentPending: true,
+        isDeleted: false,
+        stage: { notIn: [ComplaintStage.COMPLETED, ComplaintStage.REJECTED] },
+      },
+      orderBy: { createdAt: 'asc' },
+      include: COMPLAINT_INCLUDE,
+    });
+    if (complaints.length === 0) return [];
+
+    await prisma.complaint.updateMany({
+      where: { id: { in: complaints.map((c) => c.id) } },
+      data: { assignmentPending: false, assignmentDeadline: null },
+    });
+
+    for (const complaint of complaints) {
+      await logComplaintEvent({
+        complaintId: complaint.id,
+        event: 'ASSIGNMENT_POPUP_DELIVERED',
+        metadata: { providerId },
+      });
+    }
+
+    return complaints;
+  }
+
+  // Background sweep (see jobs/assignmentDeadlineSweep.ts) — reassigns any
+  // complaint whose provider never opened the app to see their deferred,
+  // outside-business-hours assignment before the deadline. Mirrors
+  // rejectAssignment's reassignment path, just triggered by a timeout
+  // instead of an explicit reject.
+  static async reassignExpiredPendingAssignments(): Promise<void> {
+    const expired = await prisma.complaint.findMany({
+      where: {
+        assignmentPending: true,
+        assignmentDeadline: { lt: new Date() },
+        isDeleted: false,
+        stage: { notIn: [ComplaintStage.COMPLETED, ComplaintStage.REJECTED] },
+      },
+    });
+
+    for (const complaint of expired) {
+      if (!complaint.providerId) continue;
+
+      const rejectedProviderIds = [...complaint.rejectedProviderIds, complaint.providerId];
+
+      // Guarded by `assignmentPending: true` in the WHERE clause, not just the
+      // initial findMany above — closes the race where the provider opens the
+      // app and claimPendingAssignment() clears the flag in between this
+      // sweep's read and write. Without this check, a provider who claimed
+      // their popup an instant before the sweep runs could still get yanked
+      // off the job it just showed them.
+      const { count } = await prisma.complaint.updateMany({
+        where: { id: complaint.id, assignmentPending: true },
+        data: {
+          providerId:         null,
+          providerAccepted:   false,
+          providerAcceptedAt: null,
+          assignmentPending:  false,
+          assignmentDeadline: null,
+          rejectedProviderIds,
+        },
+      });
+      if (count === 0) continue;
+
+      logger.info('[Complaint] Provider never opened app before assignment deadline — reassigning', {
+        complaintId: complaint.id, providerId: complaint.providerId,
+      });
+
+      await logComplaintEvent({
+        complaintId: complaint.id,
+        event: 'ASSIGNMENT_EXPIRED_REASSIGNING',
+        metadata: { providerId: complaint.providerId },
+      });
+
+      await ComplaintService.autoAssignProvider(complaint.id, rejectedProviderIds);
+    }
   }
 
   static async acceptAssignment(complaintId: string, providerId: string) {
@@ -458,6 +653,13 @@ export class ComplaintService {
         providerAcceptedAt: new Date(),
       },
       include: COMPLAINT_INCLUDE,
+    });
+
+    await logComplaintEvent({
+      complaintId,
+      event: 'PROVIDER_ACCEPTED',
+      actorId: providerId,
+      actorRole: Role.PROVIDER,
     });
 
     emit(() =>
@@ -493,6 +695,13 @@ export class ComplaintService {
       include: COMPLAINT_INCLUDE,
     });
 
+    await logComplaintEvent({
+      complaintId,
+      event: 'PROVIDER_REJECTED',
+      actorId: providerId,
+      actorRole: Role.PROVIDER,
+    });
+
     emit(() =>
       RealtimeService.emitProviderRejected(updated as unknown as Record<string, unknown>),
     );
@@ -518,11 +727,19 @@ export class ComplaintService {
 
   // ─── Quote ────────────────────────────────────────────────────────────────
 
-  static async addQuote({ complaintId, providerId, items, notes }: AddQuoteInput) {
+  static async addQuote({ complaintId, requesterId, asAdmin, items, notes }: AddQuoteInput) {
     const complaint = await prisma.complaint.findFirst({
-      where: { id: complaintId, providerId, isDeleted: false },
+      where: { id: complaintId, ...(asAdmin ? {} : { providerId: requesterId }), isDeleted: false },
     });
     if (!complaint) throw new ApiError(404, 'Complaint not found or not assigned to you');
+
+    // An admin can enter a quote on the provider's behalf (e.g. phoned-in
+    // estimate), but there must already be a provider assigned — a quote is
+    // inherently that provider's estimate, not something an admin invents
+    // for an unassigned complaint.
+    if (asAdmin && !complaint.providerId) {
+      throw new ApiError(400, 'Assign a provider before adding a quote');
+    }
 
     if (
       complaint.stage !== ComplaintStage.QR_VALIDATED &&
@@ -531,12 +748,33 @@ export class ComplaintService {
       throw new ApiError(400, 'Quote can only be submitted after QR validation');
     }
 
-    const totalAmount = items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+    // Catalogue items (partId set) get their name/price re-resolved from the
+    // CMS *now*, at estimation time — the client's own unitPrice is never
+    // trusted for these, since it may have been read from a stale cache.
+    // Once written into Quote.items (plain JSON), this is a permanent
+    // snapshot: a later CMS price change can never retroactively change an
+    // already-created quote's total, so payouts/invoices computed from it
+    // stay consistent even after the CMS price moves.
+    //
+    // Exception: `priceOverridden` is an explicit admin backdoor for when the
+    // real cost ran higher than the listed catalogue price — the client's
+    // unitPrice is trusted verbatim in that case (still snapshotted the same
+    // way, just sourced from the admin's own number instead of the CMS).
+    const snapshotItems = await Promise.all(
+      items.map(async (item) => {
+        if (!item.partId || item.priceOverridden) return item;
+        const part = await StrapiService.fetchPartByDocumentId(item.partId);
+        if (!part) return item;
+        return { ...item, name: part.name, unitPrice: part.face_value };
+      }),
+    );
+
+    const totalAmount = snapshotItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
 
     const quote = await prisma.quote.upsert({
       where:  { complaintId },
-      update: { items, totalAmount, notes: notes ?? null, status: QuoteStatus.PENDING },
-      create: { complaintId, items, totalAmount, notes: notes ?? null },
+      update: { items: snapshotItems, totalAmount, notes: notes ?? null, status: QuoteStatus.PENDING },
+      create: { complaintId, items: snapshotItems, totalAmount, notes: notes ?? null },
     });
 
     // Move stage to APPROVAL so customer can review
@@ -544,6 +782,16 @@ export class ComplaintService {
       where: { id: complaintId },
       data:  { stage: ComplaintStage.APPROVAL },
       include: COMPLAINT_INCLUDE,
+    });
+
+    await logComplaintEvent({
+      complaintId,
+      event: 'QUOTE_ADDED',
+      fromStage: complaint.stage,
+      toStage: ComplaintStage.APPROVAL,
+      actorId: requesterId,
+      actorRole: asAdmin ? Role.ADMIN : Role.PROVIDER,
+      metadata: { totalAmount },
     });
 
     emit(() =>
@@ -595,6 +843,15 @@ export class ComplaintService {
         }),
       ]);
 
+      await logComplaintEvent({
+        complaintId,
+        event: 'QUOTE_APPROVED',
+        fromStage: ComplaintStage.APPROVAL,
+        toStage: nextStage,
+        actorId: userId,
+        actorRole: asAdmin ? Role.ADMIN : Role.CUSTOMER,
+      });
+
       emit(() =>
         RealtimeService.emitQuoteResponded(
           updatedComplaint as unknown as Record<string, unknown>,
@@ -635,6 +892,16 @@ export class ComplaintService {
           data:  { status: QuoteStatus.REJECTED },
         }),
       ]);
+
+      await logComplaintEvent({
+        complaintId,
+        event: 'QUOTE_REJECTED',
+        fromStage: ComplaintStage.APPROVAL,
+        toStage: ComplaintStage.REJECTED,
+        actorId: userId,
+        actorRole: asAdmin ? Role.ADMIN : Role.CUSTOMER,
+        ...(rejectionReason && { metadata: { rejectionReason } }),
+      });
 
       emit(() =>
         RealtimeService.emitQuoteResponded(
@@ -797,6 +1064,15 @@ export class ComplaintService {
       include: COMPLAINT_INCLUDE,
     });
 
+    await logComplaintEvent({
+      complaintId,
+      event: 'STAGE_CHANGED',
+      fromStage: ComplaintStage.ENTRANCE,
+      toStage: ComplaintStage.QR_VALIDATED,
+      actorId: providerId,
+      actorRole: Role.PROVIDER,
+    });
+
     emit(() =>
       RealtimeService.emitStageChanged(
         updated as unknown as Record<string, unknown>,
@@ -911,6 +1187,15 @@ export class ComplaintService {
         include: COMPLAINT_INCLUDE,
       });
     }
+
+    await logComplaintEvent({
+      complaintId: newComplaint.id,
+      event: 'REOPENED',
+      toStage: ComplaintStage.ENTRANCE,
+      actorId: userId,
+      actorRole: asAdmin ? Role.ADMIN : Role.CUSTOMER,
+      metadata: { originalComplaintId: complaintId },
+    });
 
     emit(() =>
       NotificationService.sendToUser({
@@ -1038,6 +1323,15 @@ export class ComplaintService {
       include: COMPLAINT_INCLUDE,
     });
 
+    await logComplaintEvent({
+      complaintId,
+      event: 'STAGE_CHANGED',
+      fromStage: ComplaintStage.IN_PROGRESS,
+      toStage: ComplaintStage.PAYMENT,
+      actorId: providerId,
+      actorRole: Role.PROVIDER,
+    });
+
     emit(() =>
       RealtimeService.emitStageChanged(
         updated as unknown as Record<string, unknown>,
@@ -1127,6 +1421,16 @@ export class ComplaintService {
 
     const deviceLinks = await prisma.complaintDevice.findMany({ where: { complaintId }, select: { deviceId: true } });
     await ComplaintService.recordServiceCompletionHistory(deviceLinks.map((l) => l.deviceId), complaint.quote?.items);
+
+    await logComplaintEvent({
+      complaintId,
+      event: 'STAGE_CHANGED',
+      fromStage: ComplaintStage.PAYMENT,
+      toStage: ComplaintStage.COMPLETED,
+      actorId: providerId,
+      actorRole: Role.PROVIDER,
+      metadata: { method, totalAmount },
+    });
 
     emit(() =>
       RealtimeService.emitStageChanged(

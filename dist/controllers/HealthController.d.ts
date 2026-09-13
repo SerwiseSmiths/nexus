@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import { Request, Response, NextFunction } from 'express';
 export declare class HealthController {
-    static getStatus: (_req: Request, res: Response) => void;
+    static ping: (_req: Request, res: Response, next: NextFunction) => Promise<any>;
 }
