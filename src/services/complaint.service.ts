@@ -130,6 +130,9 @@ function generateQrExpiry(): Date {
 // UTC+5:30 offset (no DST), so shifting by a constant ms value and reading
 // the UTC getters back off the shifted Date gives IST wall-clock components
 // without needing Intl/timezone-database parsing.
+//
+// Enforced in PRODUCTION only — dev/local/test environments allow the
+// popup at any time so testing (and demoing) isn't gated by the clock.
 // ---------------------------------------------------------------------------
 
 const BUSINESS_HOURS_START = 9;
@@ -147,6 +150,7 @@ function istParts(date: Date): { year: number; month: number; day: number; hour:
 }
 
 function isWithinBusinessHours(date: Date = new Date()): boolean {
+  if (process.env.NODE_ENV !== 'production') return true;
   const { hour } = istParts(date);
   return hour >= BUSINESS_HOURS_START && hour < BUSINESS_HOURS_END;
 }

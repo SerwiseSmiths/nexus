@@ -2,7 +2,7 @@
 
 Living reference for the service-request lifecycle — creation, provider matching, on-site QR entry, quoting, payment, and reopening — shared by **serwise** (customer), **radix** (provider), and **watchtower** (admin). Read this before touching complaint code; same purpose as `docs/authentication.md` and `docs/device.md`.
 
-Last verified against the codebase: 2026-09-13.
+Last verified against the codebase: 2026-09-16.
 
 ---
 
@@ -103,6 +103,8 @@ If you add a third path that creates or re-queues a complaint, check whether it 
 ### 5.1 Business-hours job-assignment popup (added 2026-09-13)
 
 The full-screen "New Job" popup in radix is only allowed to fire **live** between **9am-6pm IST** (`isWithinBusinessHours`, `service.ts` — IST is a fixed UTC+5:30 offset, computed by shifting the `Date` and reading UTC getters back off it, no timezone-database dependency). This applies to every path that reaches `assignProvider` — manual admin assignment, `autoAssignProvider` (on create/reject/reopen), and the sweep's own reassignment.
+
+**Enforced in `NODE_ENV=production` only (added 2026-09-16)** — `isWithinBusinessHours` returns `true` unconditionally for every other environment (`local`, `development`/dev-UAT, `test`), so assignments in dev/UAT fire the popup immediately at any hour, un-gated. Testing/demoing the feature end-to-end (not just its deferred/reassignment path) still requires hitting the real production environment or temporarily flipping this check locally.
 
 - **Inside the window**: unchanged from before this date — the provider-facing FCM push (`dataOnly`, `metadata.event: 'complaint_assigned'`) and the realtime `complaint:assigned` broadcast both fire immediately.
 - **Outside the window**: `Complaint.assignmentPending = true` and `Complaint.assignmentDeadline` is set to **6pm IST the next calendar day** (`nextAssignmentDeadline`). The provider-facing push/realtime are *not* sent — `RealtimeService.emitProviderAssigned(complaint, notifyProvider)`'s second arg gates this; the customer-facing `complaint:provider_assigned` event is unaffected either way.
@@ -268,6 +270,8 @@ src/tests/dbHelpers.ts                  — resetAllTestTables, extended for Quo
 ---
 
 ## 14. Change Log
+
+- **2026-09-16** — `isWithinBusinessHours` (§5.1) now only enforces the 9am-6pm IST window in `NODE_ENV=production` — dev/local/test always allow the popup immediately, at any hour, so QA/demo on the `-dev` UAT environment isn't gated by the clock.
 
 - **2026-09-13** — Business hours + quote/CMS/audit-log pass:
   - Added `assignmentPending`/`assignmentDeadline` to `Complaint`, gating the provider-facing job-assignment popup to 9am-6pm IST (§5.1). New `GET /complaint/assignment/pending` claims all deferred assignments for a provider in one call. New 5-minute sweep (`src/jobs/assignmentDeadlineSweep.ts`) reassigns unclaimed deferred assignments past their deadline, with a `updateMany`-guarded write closing a real race against a provider claiming their popup at the same instant.
