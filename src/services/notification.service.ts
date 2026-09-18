@@ -71,6 +71,7 @@ export class NotificationService {
     });
 
     if (tokens.length === 0) {
+      logger.warn('[FCM] No active device tokens — skipping push', { userId, notificationId: notification.id });
       await prisma.notification.update({
         where: { id: notification.id },
         data:  { status: NotificationStatus.FAILED },
@@ -80,7 +81,7 @@ export class NotificationService {
 
     const messaging = this.getMessaging();
     if (!messaging) {
-      logger.warn('[FCM] Firebase not initialized — skipping push');
+      logger.warn('[FCM] Firebase not initialized — skipping push', { userId, notificationId: notification.id });
       return notification;
     }
 
@@ -96,6 +97,14 @@ export class NotificationService {
           )),
       };
 
+      logger.info('[FCM] Sending push', {
+        userId,
+        notificationId: notification.id,
+        tokenCount:     tokens.length,
+        dataOnly:       !!dataOnly,
+        type:           type ?? NotificationType.SERVICE,
+      });
+
       const response = await messaging.sendEachForMulticast({
         tokens:       tokens.map(t => t.token),
         ...(!dataOnly && { notification: { title, body } }),
@@ -110,20 +119,33 @@ export class NotificationService {
           'messaging/invalid-registration-token',
           'messaging/registration-token-not-registered',
         ];
-        if (!r.success && r.error?.code && invalidCodes.includes(r.error.code)) {
-          prisma.deviceToken
-            .update({ where: { token: tokens[i].token }, data: { isActive: false } })
-            .catch(() => {});
+        if (!r.success && r.error?.code) {
+          logger.warn('[FCM] Token delivery failed', {
+            notificationId: notification.id,
+            token:          tokens[i].token,
+            errorCode:      r.error.code,
+          });
+          if (invalidCodes.includes(r.error.code)) {
+            prisma.deviceToken
+              .update({ where: { token: tokens[i].token }, data: { isActive: false } })
+              .catch(() => {});
+          }
         }
       });
 
       const allFailed = response.failureCount === tokens.length;
+      logger.info('[FCM] Push result', {
+        notificationId: notification.id,
+        successCount:   response.successCount,
+        failureCount:   response.failureCount,
+      });
+
       await prisma.notification.update({
         where: { id: notification.id },
         data:  { status: allFailed ? NotificationStatus.FAILED : NotificationStatus.SENT },
       });
     } catch (err) {
-      logger.error('[FCM] sendEachForMulticast error:', err);
+      logger.error('[FCM] sendEachForMulticast error:', { userId, notificationId: notification.id, err });
       await prisma.notification.update({
         where: { id: notification.id },
         data:  { status: NotificationStatus.FAILED },
