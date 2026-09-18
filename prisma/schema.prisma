@@ -138,6 +138,14 @@ enum DevicePlatform {
   IOS
 }
 
+// Which mobile app a DeviceToken's FCM token was issued to — serwise and
+// radix are separate Firebase projects (see NotificationService.getMessaging),
+// so this is what routes a push through the right Firebase Admin credential.
+enum DeviceApp {
+  SERWISE
+  RADIX
+}
+
 // ─── Core Models ──────────────────────────────────────────────────────────────
 
 model User {
@@ -627,6 +635,10 @@ model DeviceToken {
   user      User           @relation(fields: [userId], references: [id])
   token     String         @unique
   platform  DevicePlatform
+  // Nullable: tokens registered before this field existed have no reliable
+  // way to know which Firebase project they belong to — sendToUser skips
+  // those rather than guess, logging a prompt to re-register.
+  app       DeviceApp?
   isActive  Boolean        @default(true)
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt

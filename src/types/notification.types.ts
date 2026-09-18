@@ -1,4 +1,4 @@
-import { NotificationType } from '@prisma/client';
+import { NotificationType, DeviceApp } from '@prisma/client';
 
 // ---------------------------------------------------------------------------
 // Service input interfaces
@@ -24,6 +24,7 @@ export interface RegisterDeviceTokenInput {
   userId:   string;
   token:    string;
   platform: 'ANDROID' | 'IOS';
+  app:      DeviceApp;
 }
 
 // ---------------------------------------------------------------------------

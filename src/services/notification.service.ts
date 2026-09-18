@@ -1,21 +1,21 @@
 import * as admin from 'firebase-admin';
-import { DevicePlatform, NotificationStatus, NotificationType } from '@prisma/client';
-import { initializeFirebase } from '@/configs/firebase.admin';
+import { DeviceApp, DevicePlatform, NotificationStatus, NotificationType } from '@prisma/client';
+import { initializePushFirebase } from '@/configs/firebase.admin';
 import prisma from '@/services/prisma.service';
 import { ApiError } from '@/utils/apiResponse';
 import { logger } from '@/utils/logger';
 import type { SendNotificationInput, RegisterDeviceTokenInput } from '@/types/notification.types';
 
 export class NotificationService {
-  private static getMessaging(): admin.messaging.Messaging | null {
-    const app = initializeFirebase();
+  private static getMessaging(deviceApp: DeviceApp): admin.messaging.Messaging | null {
+    const app = initializePushFirebase(deviceApp);
     if (!app) return null;
     return admin.messaging(app);
   }
 
   // ─── Device Token ──────────────────────────────────────────────────────────
 
-  static async registerDeviceToken({ userId, token, platform }: RegisterDeviceTokenInput) {
+  static async registerDeviceToken({ userId, token, platform, app }: RegisterDeviceTokenInput) {
     const existing = await prisma.deviceToken.findUnique({ where: { token } });
 
     // Token belongs to a different user — deactivate old binding
@@ -25,8 +25,8 @@ export class NotificationService {
 
     return prisma.deviceToken.upsert({
       where:  { token },
-      update: { userId, platform: platform as DevicePlatform, isActive: true },
-      create: { userId, token, platform: platform as DevicePlatform },
+      update: { userId, platform: platform as DevicePlatform, app, isActive: true },
+      create: { userId, token, platform: platform as DevicePlatform, app },
     });
   }
 
@@ -65,13 +65,33 @@ export class NotificationService {
     });
 
     // Fetch active FCM tokens
-    const tokens = await prisma.deviceToken.findMany({
+    const allTokens = await prisma.deviceToken.findMany({
       where:  { userId, isActive: true },
-      select: { token: true },
+      select: { token: true, app: true },
     });
 
-    if (tokens.length === 0) {
-      logger.warn('[FCM] No active device tokens — skipping push', { userId, notificationId: notification.id });
+    // Tokens registered before the `app` field existed can't be attributed to
+    // a Firebase project — sending to them would just fail with
+    // `messaging/mismatched-credential` against whichever project we guessed.
+    // The client re-registers on its own on next launch (NotificationService.init),
+    // so these self-heal rather than needing a backfill.
+    const legacyCount = allTokens.filter(t => !t.app).length;
+    if (legacyCount > 0) {
+      logger.warn('[FCM] Skipping tokens registered before app-scoping — they will self-heal on next app launch', {
+        userId, notificationId: notification.id, legacyCount,
+      });
+    }
+
+    const tokensByApp = new Map<DeviceApp, string[]>();
+    for (const t of allTokens) {
+      if (!t.app) continue;
+      const list = tokensByApp.get(t.app) ?? [];
+      list.push(t.token);
+      tokensByApp.set(t.app, list);
+    }
+
+    if (tokensByApp.size === 0) {
+      logger.warn('[FCM] No active, app-scoped device tokens — skipping push', { userId, notificationId: notification.id });
       await prisma.notification.update({
         where: { id: notification.id },
         data:  { status: NotificationStatus.FAILED },
@@ -79,78 +99,84 @@ export class NotificationService {
       return notification;
     }
 
-    const messaging = this.getMessaging();
-    if (!messaging) {
-      logger.warn('[FCM] Firebase not initialized — skipping push', { userId, notificationId: notification.id });
-      return notification;
-    }
+    const fcmData: Record<string, string> = {
+      notificationId: notification.id,
+      type:           type ?? NotificationType.SERVICE,
+      ...(dataOnly && { title, body }),
+      ...(complaintId && { complaintId }),
+      ...(metadata &&
+        Object.fromEntries(
+          Object.entries(metadata).map(([k, v]) => [k, String(v)]),
+        )),
+    };
 
-    try {
-      const fcmData: Record<string, string> = {
-        notificationId: notification.id,
-        type:           type ?? NotificationType.SERVICE,
-        ...(dataOnly && { title, body }),
-        ...(complaintId && { complaintId }),
-        ...(metadata &&
-          Object.fromEntries(
-            Object.entries(metadata).map(([k, v]) => [k, String(v)]),
-          )),
-      };
+    let totalSuccess = 0;
 
-      logger.info('[FCM] Sending push', {
-        userId,
-        notificationId: notification.id,
-        tokenCount:     tokens.length,
-        dataOnly:       !!dataOnly,
-        type:           type ?? NotificationType.SERVICE,
-      });
+    for (const [deviceApp, tokens] of tokensByApp) {
+      const messaging = this.getMessaging(deviceApp);
+      if (!messaging) {
+        logger.warn('[FCM] Firebase not initialized for app — skipping push', {
+          userId, notificationId: notification.id, deviceApp,
+        });
+        continue;
+      }
 
-      const response = await messaging.sendEachForMulticast({
-        tokens:       tokens.map(t => t.token),
-        ...(!dataOnly && { notification: { title, body } }),
-        data:         fcmData,
-        android:      { priority: 'high' },
-        apns:         { payload: { aps: { contentAvailable: true } } },
-      });
+      try {
+        logger.info('[FCM] Sending push', {
+          userId,
+          notificationId: notification.id,
+          deviceApp,
+          tokenCount:     tokens.length,
+          dataOnly:       !!dataOnly,
+          type:           type ?? NotificationType.SERVICE,
+        });
 
-      // Deactivate stale tokens
-      response.responses.forEach((r, i) => {
-        const invalidCodes = [
-          'messaging/invalid-registration-token',
-          'messaging/registration-token-not-registered',
-        ];
-        if (!r.success && r.error?.code) {
-          logger.warn('[FCM] Token delivery failed', {
-            notificationId: notification.id,
-            token:          tokens[i].token,
-            errorCode:      r.error.code,
-          });
-          if (invalidCodes.includes(r.error.code)) {
-            prisma.deviceToken
-              .update({ where: { token: tokens[i].token }, data: { isActive: false } })
-              .catch(() => {});
+        const response = await messaging.sendEachForMulticast({
+          tokens,
+          ...(!dataOnly && { notification: { title, body } }),
+          data:         fcmData,
+          android:      { priority: 'high' },
+          apns:         { payload: { aps: { contentAvailable: true } } },
+        });
+
+        totalSuccess += response.successCount;
+
+        // Deactivate stale tokens
+        response.responses.forEach((r, i) => {
+          const invalidCodes = [
+            'messaging/invalid-registration-token',
+            'messaging/registration-token-not-registered',
+          ];
+          if (!r.success && r.error?.code) {
+            logger.warn('[FCM] Token delivery failed', {
+              notificationId: notification.id,
+              deviceApp,
+              token:          tokens[i],
+              errorCode:      r.error.code,
+            });
+            if (invalidCodes.includes(r.error.code)) {
+              prisma.deviceToken
+                .update({ where: { token: tokens[i] }, data: { isActive: false } })
+                .catch(() => {});
+            }
           }
-        }
-      });
+        });
 
-      const allFailed = response.failureCount === tokens.length;
-      logger.info('[FCM] Push result', {
-        notificationId: notification.id,
-        successCount:   response.successCount,
-        failureCount:   response.failureCount,
-      });
-
-      await prisma.notification.update({
-        where: { id: notification.id },
-        data:  { status: allFailed ? NotificationStatus.FAILED : NotificationStatus.SENT },
-      });
-    } catch (err) {
-      logger.error('[FCM] sendEachForMulticast error:', { userId, notificationId: notification.id, err });
-      await prisma.notification.update({
-        where: { id: notification.id },
-        data:  { status: NotificationStatus.FAILED },
-      });
+        logger.info('[FCM] Push result', {
+          notificationId: notification.id,
+          deviceApp,
+          successCount:   response.successCount,
+          failureCount:   response.failureCount,
+        });
+      } catch (err) {
+        logger.error('[FCM] sendEachForMulticast error:', { userId, notificationId: notification.id, deviceApp, err });
+      }
     }
+
+    await prisma.notification.update({
+      where: { id: notification.id },
+      data:  { status: totalSuccess > 0 ? NotificationStatus.SENT : NotificationStatus.FAILED },
+    });
 
     return notification;
   }
