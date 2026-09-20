@@ -79,6 +79,53 @@ export class RealtimeService {
     });
   }
 
+  // Whether anyone is currently subscribed to a provider's channel — radix
+  // tracks presence there once its socket connects (see realtime.service.ts's
+  // channel.track() call). Used to skip a redundant FCM push when the app is
+  // already live and about to get the same event over the socket instead
+  // (see ComplaintService.assignProvider). Fire-and-forget callers should
+  // treat a timeout/error as "assume offline" — better to over-notify via FCM
+  // than to silently drop the only alert the provider gets.
+  static async isProviderOnline(providerId: string, timeoutMs = 3_000): Promise<boolean> {
+    const channelName = `provider:${providerId}`;
+    const { url, serviceRoleKey } = getSupabaseConfig();
+
+    const supabase = createClient(url, serviceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const channel = supabase.channel(channelName);
+
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (online: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        supabase.removeChannel(channel);
+        resolve(online);
+      };
+
+      const timeout = setTimeout(() => {
+        console.warn(`[Realtime] isProviderOnline timed out — assuming offline`, { providerId });
+        finish(false);
+      }, timeoutMs);
+
+      // Supabase sends the channel's current presence state as soon as this
+      // subscriber syncs — we never call channel.track() ourselves, so any
+      // key present here is a real client (the radix app).
+      channel.on('presence', { event: 'sync' }, () => {
+        const state = channel.presenceState();
+        finish(Object.keys(state).length > 0);
+      });
+
+      channel.subscribe((status: string, err?: Error) => {
+        if (err || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          finish(false);
+        }
+      });
+    });
+  }
+
   // ─── Per-user / per-provider emit ─────────────────────────────────────────
 
   static async emitToUser(

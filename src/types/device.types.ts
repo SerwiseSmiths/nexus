@@ -45,25 +45,36 @@ const purchaseDateSchema = z
 // ---------------------------------------------------------------------------
 // Master Purifier (RO) metadata schema
 // ---------------------------------------------------------------------------
-// Checkboxes the client never toggled are omitted from the payload entirely
-// (not sent as `false`), so every key defaults to false when absent.
+// Each field is a quantity (e.g. 2 spun filters) — radix's CheckboxGroup is a
+// +/- counter per technology and sends numbers. watchtower's admin-facing
+// AddApplianceForm still uses a plain checkbox and sends real booleans for
+// the same fields — accepting both keeps that client working without forcing
+// it into a counter UI it doesn't need; a boolean is just treated as 1/0.
+// Technologies the client never touched are omitted from the payload
+// entirely (not sent as `0`), so every key defaults to 0 when absent.
+const technologyCount = () =>
+  z
+    .union([z.boolean(), z.number().int().min(0)])
+    .optional()
+    .transform((v) => (v === undefined ? 0 : typeof v === 'boolean' ? (v ? 1 : 0) : v));
+
 const BasicTechnologySchema = z.object({
-  spunFilter:       z.boolean().optional().default(false),
-  sedimentFilter:   z.boolean().optional().default(false),
-  preCarbonFilter:  z.boolean().optional().default(false),
-  postCarbonFilter: z.boolean().optional().default(false),
-  uv:               z.boolean().optional().default(false),
-  uf:               z.boolean().optional().default(false),
-  tdsController:    z.boolean().optional().default(false),
-  alkalineFilter:   z.boolean().optional().default(false),
+  spunFilter:       technologyCount(),
+  sedimentFilter:   technologyCount(),
+  preCarbonFilter:  technologyCount(),
+  postCarbonFilter: technologyCount(),
+  uv:               technologyCount(),
+  uf:               technologyCount(),
+  tdsController:    technologyCount(),
+  alkalineFilter:   technologyCount(),
 });
 
 const AdditionalTechnologySchema = z.object({
-  copper:    z.boolean().optional().default(false),
-  magnesium: z.boolean().optional().default(false),
-  zinc:      z.boolean().optional().default(false),
-  selenium:  z.boolean().optional().default(false),
-  other:     z.boolean().optional().default(false),
+  copper:    technologyCount(),
+  magnesium: technologyCount(),
+  zinc:      technologyCount(),
+  selenium:  technologyCount(),
+  other:     technologyCount(),
 });
 
 export const MasterPurifierMetaSchema = z.object({

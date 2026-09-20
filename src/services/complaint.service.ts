@@ -525,8 +525,19 @@ export class ComplaintService {
       RealtimeService.emitProviderAssigned(updated as unknown as Record<string, unknown>, withinHours),
     );
     if (withinHours) {
-      emit(() =>
-        NotificationService.sendToUser({
+      // If the provider's app is live and already subscribed to its realtime
+      // channel, the emitProviderAssigned() broadcast above delivers
+      // 'complaint:assigned' immediately and radix opens the job popup
+      // straight from that — an FCM push at the same moment would just be a
+      // redundant, slightly-delayed duplicate. Only fall back to push when
+      // there's nobody listening on the socket to catch the realtime event.
+      emit(async () => {
+        const online = await RealtimeService.isProviderOnline(providerId);
+        if (online) {
+          logger.info('[Complaint] Provider is realtime-connected — skipping FCM push', { providerId, complaintId });
+          return;
+        }
+        return NotificationService.sendToUser({
           userId:      providerId,
           title:       'New Job Assigned',
           body:        `You have been assigned a new service complaint: "${complaint.title}"`,
@@ -536,8 +547,8 @@ export class ComplaintService {
           // popup even when backgrounded/locked, instead of a plain tray notification.
           dataOnly:    true,
           metadata:    { event: 'complaint_assigned' },
-        }),
-      );
+        });
+      });
     }
     emit(() =>
       NotificationService.sendToUser({
