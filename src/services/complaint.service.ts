@@ -537,6 +537,7 @@ export class ComplaintService {
           logger.info('[Complaint] Provider is realtime-connected — skipping FCM push', { providerId, complaintId });
           return;
         }
+        logger.info('[Complaint] Provider not realtime-connected — sending FCM push', { providerId, complaintId });
         return NotificationService.sendToUser({
           userId:      providerId,
           title:       'New Job Assigned',

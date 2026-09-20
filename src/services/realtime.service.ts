@@ -95,19 +95,21 @@ export class RealtimeService {
     });
     const channel = supabase.channel(channelName);
 
+    console.log(`[Realtime] isProviderOnline — checking`, { providerId, channel: channelName });
+
     return new Promise<boolean>((resolve) => {
       let settled = false;
-      const finish = (online: boolean) => {
+      const finish = (online: boolean, reason: string) => {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
         supabase.removeChannel(channel);
+        console.log(`[Realtime] isProviderOnline — resolved`, { providerId, online, reason });
         resolve(online);
       };
 
       const timeout = setTimeout(() => {
-        console.warn(`[Realtime] isProviderOnline timed out — assuming offline`, { providerId });
-        finish(false);
+        finish(false, 'timeout');
       }, timeoutMs);
 
       // Supabase sends the channel's current presence state as soon as this
@@ -115,12 +117,15 @@ export class RealtimeService {
       // key present here is a real client (the radix app).
       channel.on('presence', { event: 'sync' }, () => {
         const state = channel.presenceState();
-        finish(Object.keys(state).length > 0);
+        const keys = Object.keys(state);
+        console.log(`[Realtime] isProviderOnline — presence sync`, { providerId, presentKeys: keys });
+        finish(keys.length > 0, keys.length > 0 ? 'presence_found' : 'presence_empty');
       });
 
       channel.subscribe((status: string, err?: Error) => {
+        console.log(`[Realtime] isProviderOnline — subscribe status`, { providerId, status, err: err?.message });
         if (err || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          finish(false);
+          finish(false, `subscribe_${status}`);
         }
       });
     });
