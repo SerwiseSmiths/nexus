@@ -224,8 +224,59 @@ export class RealtimeService {
     );
   }
 
+  // The provider gets this too — a quote can be entered by an admin from
+  // watchtower on the provider's behalf, and radix needs to see the complaint
+  // move to APPROVAL without the provider having submitted anything itself.
   static async emitQuoteAdded(complaint: BroadcastPayload): Promise<void> {
-    await this.emitToUser(complaint.userId as string, 'complaint:quote_added', { complaint });
+    const payload = { complaint };
+    await Promise.allSettled([
+      this.emitToUser(complaint.userId as string, 'complaint:quote_added', payload),
+      complaint.providerId
+        ? this.emitToProvider(complaint.providerId as string, 'complaint:quote_added', payload)
+        : Promise.resolve(),
+    ]);
+  }
+
+  // Generic "this complaint changed, refetch it" signal for the assigned
+  // provider — for changes that aren't a stage transition (devices linked,
+  // complaint deleted, a silent out-of-hours assignment, …). Radix only
+  // invalidates its caches on this; it never shows UI for it.
+  static async emitComplaintUpdated(complaint: BroadcastPayload): Promise<void> {
+    if (!complaint.providerId) return;
+    await this.emitToProvider(complaint.providerId as string, 'complaint:updated', { complaint });
+  }
+
+  // Sent to the provider a complaint was just taken away from (admin
+  // reassigned it to someone else) so it drops off their list immediately.
+  static async emitProviderUnassigned(providerId: string, complaint: BroadcastPayload): Promise<void> {
+    await this.emitToProvider(providerId, 'complaint:unassigned', { complaint });
+  }
+
+  // ─── Provider account events (admin edits from watchtower) ────────────────
+
+  // Name / avatar / skills / active status changed — radix re-pulls /me/self.
+  static async emitProviderProfileUpdated(providerId: string): Promise<void> {
+    await this.emitToProvider(providerId, 'profile:updated', {});
+  }
+
+  // Bank account approved/edited — radix refetches its bank-details query.
+  static async emitProviderBankUpdated(providerId: string): Promise<void> {
+    await this.emitToProvider(providerId, 'bank:updated', {});
+  }
+
+  // Wallet credited/debited (manual adjustment or payout) — radix refetches
+  // home stats, whose earnings figures are read straight off the wallet.
+  static async emitProviderWalletUpdated(providerId: string): Promise<void> {
+    await this.emitToProvider(providerId, 'wallet:updated', {});
+  }
+
+  // A customer's device list changed outside radix (e.g. admin added a device
+  // from watchtower) — sent to every provider with an open job for that
+  // customer so their appliance-select / work-history lists refresh.
+  static async emitCustomerDevicesUpdated(providerIds: string[], customerId: string): Promise<void> {
+    await Promise.allSettled(
+      providerIds.map(id => this.emitToProvider(id, 'devices:updated', { customerId })),
+    );
   }
 
   static async emitQuoteResponded(

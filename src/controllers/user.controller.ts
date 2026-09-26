@@ -4,6 +4,7 @@ import { AuthRequest } from '@/middlewares/auth.middleware';
 import { UserService } from '@/services/user.service';
 import { AddressService, type CreateAddressInput, type UpdateAddressInput } from '@/services/address.service';
 import { BankService } from '@/services/bank.service';
+import { RealtimeService } from '@/services/realtime.service';
 import { ApiResponse } from '@/utils/apiResponse';
 import type {
   UploadAvatarBody,
@@ -126,6 +127,11 @@ export class UserController {
     try {
       const body = req.body as UpdateProviderBody;
       const provider = await UserService.updateProvider({ providerId: req.params.id as string, ...body });
+      // Admin edit from watchtower — push it to the provider's radix app live.
+      void RealtimeService.emitProviderProfileUpdated(req.params.id as string);
+      if (body.bankAccount !== undefined) {
+        void RealtimeService.emitProviderBankUpdated(req.params.id as string);
+      }
       return ApiResponse.success(res, 200, 'Provider updated successfully', { provider });
     } catch (error) {
       next(error);
@@ -154,6 +160,7 @@ export class UserController {
       }
 
       const user = await UserService.updateSkills({ userId: req.params.id as string, deviceTypes });
+      void RealtimeService.emitProviderProfileUpdated(req.params.id as string);
       return ApiResponse.success(res, 200, 'Provider skills updated successfully', { user });
     } catch (error) {
       next(error);
@@ -192,6 +199,7 @@ export class UserController {
   static async approveProviderBankAccount(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const bankAccount = await BankService.approve(req.params.id as string);
+      void RealtimeService.emitProviderBankUpdated(req.params.id as string);
       return ApiResponse.success(res, 200, 'Bank account approved successfully', { bankAccount });
     } catch (error) {
       next(error);

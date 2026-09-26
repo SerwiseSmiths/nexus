@@ -163,8 +163,13 @@ function nextAssignmentDeadline(date: Date = new Date()): Date {
   return new Date(Date.UTC(year, month, day + 1, BUSINESS_HOURS_END, 0) - IST_OFFSET_MS);
 }
 
+// `Promise.resolve().then(fn)` (not a bare `fn()`) so a synchronous throw
+// inside fn — e.g. a partially-mocked service in tests — is caught here too
+// instead of escaping and failing the request that triggered it.
 function emit(fn: () => Promise<unknown>): void {
-  fn().catch((err) => logger.error('[Complaint] Background task failed:', err));
+  Promise.resolve()
+    .then(fn)
+    .catch((err) => logger.error('[Complaint] Background task failed:', err));
 }
 
 // Writes one row to the complaint's audit timeline. Always awaited inline
@@ -524,6 +529,23 @@ export class ComplaintService {
     emit(() =>
       RealtimeService.emitProviderAssigned(updated as unknown as Record<string, unknown>, withinHours),
     );
+    // Reassigned away from someone else (admin reassign from watchtower) —
+    // tell the previous provider so it drops off their list right away.
+    const previousProviderId = complaint.providerId;
+    if (previousProviderId && previousProviderId !== providerId) {
+      emit(() =>
+        RealtimeService.emitProviderUnassigned(
+          previousProviderId,
+          updated as unknown as Record<string, unknown>,
+        ),
+      );
+    }
+    // Outside business hours the 'complaint:assigned' popup is held back
+    // (see emitProviderAssigned), but the new provider's list/task count
+    // should still refresh silently if the app happens to be open.
+    if (!withinHours) {
+      emit(() => RealtimeService.emitComplaintUpdated(updated as unknown as Record<string, unknown>));
+    }
     if (withinHours) {
       // If the provider's app is live and already subscribed to its realtime
       // channel, the emitProviderAssigned() broadcast above delivers
@@ -1013,6 +1035,18 @@ export class ComplaintService {
       include: COMPLAINT_INCLUDE,
     });
 
+    // Devices can also be linked by an admin from watchtower — the assigned
+    // provider's copy of this complaint (and its stage) must refresh either way.
+    emit(() =>
+      wasQrValidated
+        ? RealtimeService.emitStageChanged(
+            updated as unknown as Record<string, unknown>,
+            ComplaintStage.QR_VALIDATED,
+            ComplaintStage.ESTIMATION,
+          )
+        : RealtimeService.emitComplaintUpdated(updated as unknown as Record<string, unknown>),
+    );
+
     if (wasQrValidated) {
       emit(() =>
         NotificationService.sendToUser({
@@ -1498,9 +1532,14 @@ export class ComplaintService {
       throw new ApiError(400, 'Active complaints can only be deleted by an admin');
     }
 
-    return prisma.complaint.update({
+    const deleted = await prisma.complaint.update({
       where: { id: complaintId },
       data:  { isDeleted: true },
     });
+
+    // Drops the job off the assigned provider's list (admin delete from watchtower).
+    emit(() => RealtimeService.emitComplaintUpdated(deleted as unknown as Record<string, unknown>));
+
+    return deleted;
   }
 }

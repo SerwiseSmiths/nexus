@@ -4,7 +4,7 @@ import { config } from "../configs";
 import prisma from "./prisma.service";
 import { sendOtpSms } from "./hanuotp.service";
 import { logger } from "@/utils/logger";
-import { Role, NotificationType, WalletLedgerSource, WalletType } from "@prisma/client";
+import { DeviceApp, Role, NotificationType, WalletLedgerSource, WalletType } from "@prisma/client";
 import { NotificationService } from '@/services/notification.service';
 import { ApiError } from "../utils/apiResponse";
 import { generateUniqueReferralCode } from "../utils/referralCode";
@@ -209,7 +209,7 @@ export class AuthService {
     return { accessToken };
   }
 
-  static async logout(refreshToken: string) {
+  static async logout(refreshToken: string, app?: DeviceApp) {
     const record = await prisma.refreshToken.findUnique({
       where:  { token: refreshToken },
       select: { userId: true },
@@ -218,6 +218,10 @@ export class AuthService {
     await prisma.refreshToken.deleteMany({ where: { token: refreshToken } });
 
     if (record?.userId) {
+      // Cleared before the "Signed Out" notice below so the signed-out device
+      // stops receiving this user's pushes — the notice is still recorded in
+      // the user's notification list.
+      await NotificationService.clearDeviceTokens(record.userId, app);
       NotificationService.sendToUser({
         userId: record.userId,
         title:  'Signed Out',

@@ -2,9 +2,20 @@ import * as admin from 'firebase-admin';
 import { DeviceApp, DevicePlatform, NotificationStatus, NotificationType } from '@prisma/client';
 import { initializePushFirebase } from '@/configs/firebase.admin';
 import prisma from '@/services/prisma.service';
+import { AppContext } from '@/types/appContext';
 import { ApiError } from '@/utils/apiResponse';
 import { logger } from '@/utils/logger';
 import type { SendNotificationInput, RegisterDeviceTokenInput } from '@/types/notification.types';
+
+// serwise and radix are separate Firebase projects — an FCM token is only
+// ever valid for the app it was issued to, so the app is derived from the
+// caller's x-app-id (set by contextMiddleware, not client-supplied body)
+// rather than trusted from the request. serwise-website/watchtower aren't
+// push-capable device apps and have no token.
+const APP_CONTEXT_TO_DEVICE_APP: Partial<Record<AppContext, DeviceApp>> = {
+  [AppContext.SERWISE_APP]: DeviceApp.SERWISE,
+  [AppContext.RADIX_APP]:   DeviceApp.RADIX,
+};
 
 export class NotificationService {
   private static getMessaging(deviceApp: DeviceApp): admin.messaging.Messaging | null {
@@ -13,21 +24,43 @@ export class NotificationService {
     return admin.messaging(app);
   }
 
+  static deviceAppForContext(appContext?: AppContext): DeviceApp | undefined {
+    return appContext ? APP_CONTEXT_TO_DEVICE_APP[appContext] : undefined;
+  }
+
   // ─── Device Token ──────────────────────────────────────────────────────────
 
+  // One token per user per app: registering a new token (reinstall, new
+  // phone, FCM rotation) replaces whatever that user had before, so pushes
+  // never fan out to stale devices. The same token moving to a different user
+  // (shared phone, account switch) is rebound by the upsert. Tokens left over
+  // from before app-scoping (app: null) are unusable for sends anyway, so
+  // they're cleared out here as well.
   static async registerDeviceToken({ userId, token, platform, app }: RegisterDeviceTokenInput) {
-    const existing = await prisma.deviceToken.findUnique({ where: { token } });
+    return prisma.$transaction(async (tx) => {
+      await tx.deviceToken.deleteMany({
+        where: {
+          userId,
+          token: { not: token },
+          OR:    [{ app }, { app: null }],
+        },
+      });
 
-    // Token belongs to a different user — deactivate old binding
-    if (existing && existing.userId !== userId) {
-      await prisma.deviceToken.update({ where: { token }, data: { isActive: false } });
-    }
-
-    return prisma.deviceToken.upsert({
-      where:  { token },
-      update: { userId, platform: platform as DevicePlatform, app, isActive: true },
-      create: { userId, token, platform: platform as DevicePlatform, app },
+      return tx.deviceToken.upsert({
+        where:  { token },
+        update: { userId, platform: platform as DevicePlatform, app, isActive: true },
+        create: { userId, token, platform: platform as DevicePlatform, app },
+      });
     });
+  }
+
+  // Called on logout — the signed-out device must stop receiving this user's
+  // pushes. Scoped to the app being logged out of when known.
+  static async clearDeviceTokens(userId: string, app?: DeviceApp) {
+    const { count } = await prisma.deviceToken.deleteMany({
+      where: { userId, ...(app && { app }) },
+    });
+    logger.info('[FCM] Cleared device tokens on logout', { userId, app, count });
   }
 
   static async unregisterDeviceToken(token: string, userId: string) {

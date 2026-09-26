@@ -1,5 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { AuthService } from "../services/auth.service";
+import { NotificationService } from "@/services/notification.service";
+import type { AppContextRequest } from "@/types/appContext";
 import { Role } from "@prisma/client";
 import { ApiResponse } from "../utils/apiResponse";
 import { isValidPhoneNo, isValidOtp } from "../utils/validators";
@@ -56,11 +58,13 @@ export class AuthController {
     }
   }
 
-  static async logout(req: Request, res: Response, next: NextFunction) {
+  static async logout(req: AppContextRequest, res: Response, next: NextFunction) {
     try {
       const { refreshToken } = req.body;
       if (refreshToken) {
-        await AuthService.logout(refreshToken);
+        // Clears only the device token of the app being logged out of
+        // (from x-app-id), not the user's tokens in the other app.
+        await AuthService.logout(refreshToken, NotificationService.deviceAppForContext(req.appContext));
       }
       return ApiResponse.success(res, 200, "Logged out successfully");
     } catch (error: any) {

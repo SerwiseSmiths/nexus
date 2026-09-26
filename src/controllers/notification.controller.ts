@@ -1,23 +1,13 @@
 import { Response, NextFunction } from 'express';
-import { NotificationType, DeviceApp } from '@prisma/client';
+import { NotificationType } from '@prisma/client';
 import { AuthRequest } from '@/middlewares/auth.middleware';
-import { AppContext } from '@/types/appContext';
 import { NotificationService } from '@/services/notification.service';
+import { RealtimeService } from '@/services/realtime.service';
 import { ApiResponse } from '@/utils/apiResponse';
 import type {
   RegisterDeviceTokenBody,
   SendNotificationBody,
 } from '@/types/notification.types';
-
-// serwise and radix are separate Firebase projects — an FCM token is only
-// ever valid for the app it was issued to, so this is derived from the
-// caller's x-app-id (set by contextMiddleware, not client-supplied body)
-// rather than trusted from the request. serwise-website/watchtower aren't
-// push-capable device apps and have no token to register.
-const APP_CONTEXT_TO_DEVICE_APP: Partial<Record<AppContext, DeviceApp>> = {
-  [AppContext.SERWISE_APP]: DeviceApp.SERWISE,
-  [AppContext.RADIX_APP]:   DeviceApp.RADIX,
-};
 
 export class NotificationController {
   static async registerDeviceToken(req: AuthRequest, res: Response, next: NextFunction) {
@@ -28,7 +18,8 @@ export class NotificationController {
         return ApiResponse.error(res, 400, 'platform must be ANDROID or IOS');
       }
 
-      const app = req.appContext && APP_CONTEXT_TO_DEVICE_APP[req.appContext];
+      // Derived from x-app-id, never the request body — see deviceAppForContext.
+      const app = NotificationService.deviceAppForContext(req.appContext);
       if (!app) {
         return ApiResponse.error(res, 400, `Device tokens can't be registered from x-app-id: ${req.appContext}`);
       }
@@ -96,6 +87,10 @@ export class NotificationController {
         type:     resolvedType,
         metadata: metadata ?? undefined,
       });
+
+      // Admin-sent (watchtower) — refresh radix's notifications list live if
+      // the recipient is a provider (a customer's channel has no listener).
+      void RealtimeService.emitToProvider(userId, 'notification:new', { notification });
 
       return ApiResponse.success(res, 200, 'Notification sent', { notification });
     } catch (error) {

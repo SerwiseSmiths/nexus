@@ -1,5 +1,6 @@
-import { WorkHistoryEvent, Prisma, Role } from '@prisma/client';
+import { ComplaintStage, WorkHistoryEvent, Prisma, Role } from '@prisma/client';
 import prisma from '@/services/prisma.service';
+import { RealtimeService } from '@/services/realtime.service';
 import { ApiError } from '@/utils/apiResponse';
 import { logger } from '@/utils/logger';
 import { describeZodError } from '@/utils/zodError';
@@ -238,7 +239,31 @@ export class DeviceService {
 
     await DeviceService.recordDeviceAddedHistory(device.id, result.data.purchaseDate);
 
+    // Added by an admin (watchtower) rather than the provider on-site — let
+    // any provider with an open job for this customer see it in radix live.
+    if (requesterRole === Role.ADMIN) {
+      DeviceService.notifyProvidersOfCustomerDevices(targetUserId).catch((err) =>
+        logger.error('[Device] Failed to notify providers of device change:', err),
+      );
+    }
+
     return device;
+  }
+
+  private static async notifyProvidersOfCustomerDevices(customerId: string) {
+    const openJobs = await prisma.complaint.findMany({
+      where: {
+        userId:     customerId,
+        isDeleted:  false,
+        providerId: { not: null },
+        stage:      { notIn: [ComplaintStage.COMPLETED, ComplaintStage.REJECTED] },
+      },
+      select:   { providerId: true },
+      distinct: ['providerId'],
+    });
+    const providerIds = openJobs.map((c) => c.providerId).filter((id): id is string => !!id);
+    if (providerIds.length === 0) return;
+    await RealtimeService.emitCustomerDevicesUpdated(providerIds, customerId);
   }
 
   // Auto-records the acquisition timeline for a newly added device: PURCHASED

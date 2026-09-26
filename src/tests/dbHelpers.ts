@@ -34,6 +34,7 @@ export async function resetAllTestTables() {
   await prisma.complaintDevice.deleteMany({});
   await prisma.complaintLog.deleteMany({});
   await prisma.refreshToken.deleteMany({});
+  await prisma.deviceToken.deleteMany({});
   await prisma.wallet.deleteMany({});
   await prisma.providerProfile.deleteMany({});
   await prisma.complaint.deleteMany({});

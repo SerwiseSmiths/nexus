@@ -2,6 +2,7 @@ import { NextFunction, Response } from 'express';
 import { z } from 'zod';
 import { PayoutRequestStatus, WalletLedgerSource } from '@prisma/client';
 import { ApiError, ApiResponse } from '@/utils/apiResponse';
+import { RealtimeService } from '@/services/realtime.service';
 import { WalletService } from '@/services/wallet.service';
 import type { AuthRequest } from '@/middlewares/auth.middleware';
 
@@ -70,6 +71,9 @@ export class WalletController {
       if (!parsed.success) throw new ApiError(400, 'Validation failed', parsed.error.flatten());
 
       const result = await WalletService.creditWallet(parsed.data);
+      // Admin-only route — if the wallet belongs to a provider, radix's home
+      // earnings refresh live (a customer's channel simply has no listener).
+      void RealtimeService.emitProviderWalletUpdated(parsed.data.userId);
       ApiResponse.success(res, 200, 'Wallet credited successfully', result);
     } catch (error) {
       next(error);
@@ -82,6 +86,7 @@ export class WalletController {
       if (!parsed.success) throw new ApiError(400, 'Validation failed', parsed.error.flatten());
 
       const result = await WalletService.debitWallet(parsed.data);
+      void RealtimeService.emitProviderWalletUpdated(parsed.data.userId);
       ApiResponse.success(res, 200, 'Wallet debited successfully', result);
     } catch (error) {
       next(error);
@@ -150,6 +155,7 @@ export class WalletController {
         status:          parsed.data.status,
         adminId:         req.user!.id,
       });
+      void RealtimeService.emitProviderWalletUpdated(result.userId);
       ApiResponse.success(res, 200, 'Payout request updated successfully', result);
     } catch (error) {
       next(error);
