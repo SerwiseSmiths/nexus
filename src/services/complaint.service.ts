@@ -590,20 +590,17 @@ export class ComplaintService {
       emit(() => RealtimeService.emitComplaintUpdated(updated as unknown as Record<string, unknown>));
     }
     if (withinHours) {
-      // If the provider's app is live and already subscribed to its realtime
-      // channel, the emitProviderAssigned() broadcast above delivers
-      // 'complaint:assigned' immediately and radix opens the job popup
-      // straight from that — an FCM push at the same moment would just be a
-      // redundant, slightly-delayed duplicate. Only fall back to push when
-      // there's nobody listening on the socket to catch the realtime event.
-      emit(async () => {
-        const online = await RealtimeService.isProviderOnline(providerId);
-        if (online) {
-          logger.info('[Complaint] Provider is realtime-connected — skipping FCM push', { providerId, complaintId });
-          return;
-        }
-        logger.info('[Complaint] Provider not realtime-connected — sending FCM push', { providerId, complaintId });
-        return NotificationService.sendToUser({
+      // Always pushed, alongside the realtime broadcast above. This used to be
+      // skipped whenever RealtimeService.isProviderOnline() saw the provider's
+      // presence on the channel — but presence outlives a dead socket (the
+      // server only notices on heartbeat timeout, and radix's Android
+      // keep-alive service can hold a stale channel), so providers whose
+      // socket had silently dropped got neither the socket event nor a push.
+      // Radix de-duplicates when both arrive: its native push receiver skips
+      // while the app is on screen (JS shows the in-app popup), and the
+      // ringer ignores a second start for a job it's already ringing for.
+      emit(() =>
+        NotificationService.sendToUser({
           userId:      providerId,
           title:       'New Job Assigned',
           body:        `You have been assigned a new service complaint: "${complaint.title}"`,
@@ -619,8 +616,8 @@ export class ComplaintService {
             actionToken: ComplaintService.issueAssignmentActionToken(complaintId, providerId),
             ...assignmentPushDetails(updated),
           },
-        });
-      });
+        }),
+      );
     }
     emit(() =>
       NotificationService.sendToUser({
