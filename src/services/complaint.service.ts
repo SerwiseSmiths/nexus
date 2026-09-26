@@ -1,5 +1,7 @@
 import { ComplaintStage, NotificationType, PaymentProvider, Prisma, QuoteStatus, Role, WorkHistoryEvent } from '@prisma/client';
 import { randomUUID } from 'crypto';
+import jwt from 'jsonwebtoken';
+import { config } from '@/configs';
 import prisma from '@/services/prisma.service';
 import { ApiError } from '@/utils/apiResponse';
 import { logger } from '@/utils/logger';
@@ -166,6 +168,26 @@ function nextAssignmentDeadline(date: Date = new Date()): Date {
 // `Promise.resolve().then(fn)` (not a bare `fn()`) so a synchronous throw
 // inside fn — e.g. a partially-mocked service in tests — is caught here too
 // instead of escaping and failing the request that triggered it.
+// ---------------------------------------------------------------------------
+// Job-assignment action tokens
+//
+// Lets radix's native floating job popup accept/reject straight from the
+// phone's home screen — native Android code has no access to the JS-held
+// session, so the assignment push carries this token instead. Signed with a
+// secret *derived* from JWT_SECRET (never JWT_SECRET itself) so it can never
+// be replayed as a bearer access token against the auth middleware, and it
+// is scoped to one complaint + one provider for a short window.
+// ---------------------------------------------------------------------------
+
+const ASSIGNMENT_ACTION_PURPOSE = 'assignment-action';
+const ASSIGNMENT_ACTION_EXPIRY = '15m';
+
+function assignmentActionSecret(): jwt.Secret {
+  return `${config.jwt.secret}:${ASSIGNMENT_ACTION_PURPOSE}`;
+}
+
+export type AssignmentAction = 'accept' | 'reject';
+
 function emit(fn: () => Promise<unknown>): void {
   Promise.resolve()
     .then(fn)
@@ -569,7 +591,12 @@ export class ComplaintService {
           // Data-only — lets the provider app show a full-screen incoming-job
           // popup even when backgrounded/locked, instead of a plain tray notification.
           dataOnly:    true,
-          metadata:    { event: 'complaint_assigned' },
+          // actionToken lets radix's native floating popup accept/reject
+          // without opening the app — see respondToAssignmentWithToken.
+          metadata:    {
+            event:       'complaint_assigned',
+            actionToken: ComplaintService.issueAssignmentActionToken(complaintId, providerId),
+          },
         });
       });
     }
@@ -761,6 +788,56 @@ export class ComplaintService {
     emit(() => ComplaintService.autoAssignProvider(complaintId, updated.rejectedProviderIds));
 
     return updated;
+  }
+
+  // ─── Assignment actions from the native popup (token-authenticated) ───────
+
+  static issueAssignmentActionToken(complaintId: string, providerId: string): string {
+    return jwt.sign(
+      { purpose: ASSIGNMENT_ACTION_PURPOSE, complaintId, providerId },
+      assignmentActionSecret(),
+      { expiresIn: ASSIGNMENT_ACTION_EXPIRY },
+    );
+  }
+
+  // For the realtime-socket path: radix's JS gets the same token over its
+  // normal authenticated session before handing the alert to native code.
+  static async getAssignmentActionToken(complaintId: string, providerId: string): Promise<string> {
+    const complaint = await prisma.complaint.findFirst({
+      where: { id: complaintId, providerId, isDeleted: false },
+      select: { id: true },
+    });
+    if (!complaint) throw new ApiError(404, 'Complaint not found or not assigned to you');
+    return ComplaintService.issueAssignmentActionToken(complaintId, providerId);
+  }
+
+  // Only valid while the job is still awaiting this provider's decision —
+  // once accepted (or reassigned), a leaked/replayed token can't flip it.
+  static async respondToAssignmentWithToken(complaintId: string, token: string, action: AssignmentAction) {
+    let claims: { purpose?: string; complaintId?: string; providerId?: string };
+    try {
+      claims = jwt.verify(token, assignmentActionSecret()) as typeof claims;
+    } catch {
+      throw new ApiError(401, 'This job offer has expired. Open the app to respond.');
+    }
+    if (claims.purpose !== ASSIGNMENT_ACTION_PURPOSE || claims.complaintId !== complaintId || !claims.providerId) {
+      throw new ApiError(401, 'Invalid job offer link');
+    }
+
+    const complaint = await prisma.complaint.findFirst({
+      where: { id: complaintId, isDeleted: false },
+      select: { providerId: true, providerAccepted: true },
+    });
+    if (!complaint || complaint.providerId !== claims.providerId) {
+      throw new ApiError(409, 'This job is no longer assigned to you');
+    }
+    if (complaint.providerAccepted) {
+      throw new ApiError(409, 'You have already accepted this job');
+    }
+
+    return action === 'accept'
+      ? ComplaintService.acceptAssignment(complaintId, claims.providerId)
+      : ComplaintService.rejectAssignment(complaintId, claims.providerId);
   }
 
   // ─── Quote ────────────────────────────────────────────────────────────────

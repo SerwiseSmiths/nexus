@@ -263,6 +263,60 @@ router.patch(
   ComplaintController.rejectAssignment,
 );
 
+/**
+ * @swagger
+ * /complaint/{id}/assignment-action-token:
+ *   get:
+ *     summary: Issue a short-lived accept/reject token for a pending assignment (PROVIDER)
+ *     description: >
+ *       Used by radix before handing a socket-delivered job offer to its native
+ *       floating popup, which has no session of its own. The FCM push path
+ *       already carries this token in its data payload.
+ *     tags: [Complaint]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+ *     responses:
+ *       200: { description: Token issued }
+ */
+router.get(
+  '/:id/assignment-action-token',
+  auth,
+  authorize([Role.PROVIDER]),
+  ComplaintController.getAssignmentActionToken,
+);
+
+/**
+ * @swagger
+ * /complaint/{id}/assignment-action:
+ *   post:
+ *     summary: Accept or reject an assignment with an action token (no session)
+ *     description: >
+ *       Called by radix's native floating job popup from the phone's home
+ *       screen. Authenticated by the signed, 15-minute action token instead of
+ *       a bearer token, and only valid while the job is still awaiting that
+ *       provider's decision.
+ *     tags: [Complaint]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [token, action]
+ *             properties:
+ *               token:  { type: string }
+ *               action: { type: string, enum: [accept, reject] }
+ *     responses:
+ *       200: { description: Assignment accepted / rejected }
+ *       401: { description: Token invalid or expired }
+ *       409: { description: No longer assigned, or already accepted }
+ */
+router.post('/:id/assignment-action', ComplaintController.respondToAssignmentWithToken);
+
 // ─── Quote ────────────────────────────────────────────────────────────────────
 
 /**

@@ -1,4 +1,4 @@
-import { Response, NextFunction } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { Role } from '@prisma/client';
 import { AuthRequest } from '@/middlewares/auth.middleware';
 import { ComplaintService } from '@/services/complaint.service';
@@ -152,6 +152,36 @@ export class ComplaintController {
     try {
       const complaint = await ComplaintService.rejectAssignment(req.params.id as string, req.user!.id);
       return ApiResponse.success(res, 200, 'Assignment rejected', { complaint });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getAssignmentActionToken(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const actionToken = await ComplaintService.getAssignmentActionToken(req.params.id as string, req.user!.id);
+      return ApiResponse.success(res, 200, 'Assignment action token issued', { actionToken });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // Unauthenticated by design — called by radix's native floating popup,
+  // which has no session; the signed action token is the credential.
+  static async respondToAssignmentWithToken(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { token, action } = (req.body ?? {}) as { token?: string; action?: string };
+      if (!token) return ApiResponse.error(res, 400, 'token is required');
+      if (action !== 'accept' && action !== 'reject') {
+        return ApiResponse.error(res, 400, "action must be 'accept' or 'reject'");
+      }
+      await ComplaintService.respondToAssignmentWithToken(req.params.id as string, token, action);
+      return ApiResponse.success(
+        res,
+        200,
+        action === 'accept' ? 'Assignment accepted' : 'Assignment rejected',
+        null,
+      );
     } catch (error) {
       next(error);
     }
