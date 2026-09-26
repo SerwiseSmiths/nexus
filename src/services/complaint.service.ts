@@ -188,6 +188,27 @@ function assignmentActionSecret(): jwt.Secret {
 
 export type AssignmentAction = 'accept' | 'reject';
 
+// Everything radix's native floating job card shows (mirrors the in-app
+// NewJobPopup: job title, device pill, customer, address, call/location) —
+// sent in the assignment push because native code can't fetch the complaint
+// itself. FCM data values must be strings; empty ones are omitted.
+function assignmentPushDetails(complaint: ComplaintWithRelations): Record<string, string> {
+  const requested = Array.isArray(complaint.requestedDevices)
+    ? (complaint.requestedDevices as unknown as RequestedDevice[])
+    : [];
+  const address = complaint.address;
+  const details: Record<string, string> = {
+    jobTitle:      complaint.title ?? '',
+    deviceLabel:   requested[0]?.deviceKey ?? '',
+    customerName:  `${complaint.user?.firstName ?? ''} ${complaint.user?.lastName ?? ''}`.trim(),
+    customerPhone: complaint.user?.phoneNo ?? '',
+    address:       address
+      ? [address.houseNo, address.societyName, address.area, address.city].filter(Boolean).join(', ')
+      : '',
+  };
+  return Object.fromEntries(Object.entries(details).filter(([, v]) => v));
+}
+
 function emit(fn: () => Promise<unknown>): void {
   Promise.resolve()
     .then(fn)
@@ -596,6 +617,7 @@ export class ComplaintService {
           metadata:    {
             event:       'complaint_assigned',
             actionToken: ComplaintService.issueAssignmentActionToken(complaintId, providerId),
+            ...assignmentPushDetails(updated),
           },
         });
       });
