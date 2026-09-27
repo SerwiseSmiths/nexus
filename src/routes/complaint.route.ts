@@ -352,6 +352,7 @@ router.post('/:id/assignment-action', ComplaintController.respondToAssignmentWit
  *                     quantity:  { type: integer, default: 1 }
  *                     partId:    { type: string, description: "Strapi service-part documentId — when set, name/unitPrice are re-resolved from the CMS unless priceOverridden is true" }
  *                     priceOverridden: { type: boolean, description: "Only meaningful with partId set — trusts this item's unitPrice verbatim instead of re-resolving it from the CMS (e.g. the real cost ran higher than the listed price)" }
+ *                     labour: { type: number, description: "What the provider earns per unit — required (and must be <= unitPrice) for a custom item with no partId; ignored for a catalogue item, whose labour nexus always resolves itself from the assigned provider's tier pricing" }
  *               notes: { type: string }
  *     responses:
  *       201: { description: Quote submitted }

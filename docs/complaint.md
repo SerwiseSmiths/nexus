@@ -2,7 +2,7 @@
 
 Living reference for the service-request lifecycle — creation, provider matching, on-site QR entry, quoting, payment, and reopening — shared by **serwise** (customer), **radix** (provider), and **watchtower** (admin). Read this before touching complaint code; same purpose as `docs/authentication.md` and `docs/device.md`.
 
-Last verified against the codebase: 2026-09-16.
+Last verified against the codebase: 2026-09-27.
 
 ---
 
@@ -150,6 +150,14 @@ Every meaningful complaint mutation writes one row to `ComplaintLog` (`complaint
 
 **Known gap**: `logComplaintEvent` swallows its own errors (logged, never thrown) so a rare DB hiccup on the log write never fails the underlying request — but that also means the log isn't 100%-guaranteed-complete; a failed log write is invisible except in nexus's own logs.
 
+### 6.6 Per-item labour — what the provider actually earns (added 2026-09-27)
+
+Each quote item can carry a `labour` value (per unit, same convention as `unitPrice`) — see §7.1 for why this exists (correct CASH/WALLET provider payouts).
+
+- **Catalogue item** (`partId` set): `labour` is always resolved server-side in `addQuote` via `ComplaintService.resolveTierAwareLabour(servicePartId, providerTierId, baseLabour)` — the assigned provider's `ServicePartTierPricing` override for that part (its `labour` field) if one exists and isn't `null`, else the part's own base labour (CMS `provider_cut` — despite the internal field name, this is what watchtower's pricing table labels "Labour"; see `watchtower/src/app/pricing/PricingView.tsx`'s `resolvePricing`/Gross-Profit = `salesPrice - expense - labour` for the parallel client-side display logic). Resolved the same way regardless of `priceOverridden` — overriding the sale price doesn't change what the work itself is worth. The client's own `labour` value is never trusted for a catalogue item, same trust model as `unitPrice`/`name` (§6.2).
+- **Custom item** (no `partId`): there's no CMS-defined split, so the caller must supply both `unitPrice` (what the customer sees) and `labour` (what the provider earns) explicitly — `addQuote` 400s if `labour` is missing or exceeds `unitPrice`. Watchtower's `AddQuoteForm` exposes this as a dedicated "Provider's Labour" input next to the price field for a custom item only.
+- `ProviderProfile.providerTierId` (manually assigned by an admin in watchtower) had **zero consumers anywhere in nexus** before this change — `ServicePartTierPricing` existed purely for watchtower's own pricing-table display. This is the first place a provider's tier actually affects a real money computation.
+
 ---
 
 ## 7. Payment (`completePayment`, `service.ts:969-1044`)
@@ -160,9 +168,19 @@ Provider-only, must be in `PAYMENT` stage. `method` is `CASH` or `WALLET` (`Comp
 
 - `WalletService.debitCustomerForComplaintPayment(userId, amount, complaintId, tx)` (`wallet.service.ts`, added 2026-09-12) — checks the customer's wallet exists, is active, and `balance >= amount`; throws `ApiError(400, ...)` otherwise (`"Customer wallet not found"` / `"Insufficient wallet balance to complete this payment"`).
 - This debit runs **inside the same transaction** as the complaint's stage update and the provider's credit (`WalletService.creditProviderEarnings`), now at **`Serializable`** isolation — a failed/insufficient debit rolls back everything: complaint stays in `PAYMENT`, provider isn't credited, customer isn't charged. No path exists where one side moves without the other.
-- `CASH` is unchanged — no wallet interaction at all, treated as an on-site attestation by the provider.
+- `CASH`: no customer-side wallet interaction (still true) — but see the labour-split fix below, which does now touch the *provider's* wallet even for CASH.
 
 This module has **no gateway-verified online payment path** for job completion — `CASH`/`WALLET` are the only two methods, and neither talks to Razorpay. (A *separate*, unrelated Razorpay flow exists in `payment.service.ts` for `purpose: 'complaint_payment'` — that's for creating a complaint *after* an externally-verified Razorpay payment, a different product flow entirely, not something `completePayment` reuses.)
+
+### 7.1 Provider payout now reflects labour, not the full quote total (added 2026-09-27)
+
+Before this fix, both `CASH` and `WALLET` credited the provider's wallet with the **full** `totalAmount` — fine for `WALLET` (the company holds 100% of the money via the customer debit above and manually reconciles its share with the provider offline), but a real bug for `CASH`: the provider already physically holds the full amount collected on-site, so also crediting them the full total in the wallet double-counted it.
+
+- Each quote item can now carry a `labour` value (per unit) — what the provider actually earns from that item; the rest of `unitPrice` is the company's (parts cost + margin). Resolved at `addQuote` time (`ComplaintService.resolveTierAwareLabour`, §6.6) for catalogue items, or supplied directly by the caller for a custom item (§6.6).
+- `completePayment` computes `getQuoteLaborBreakdown(quote.items)` → `{ laborTotal, hasExplicitSplit }`. `laborTotal` is always credited to the provider (replacing the old full-`totalAmount` credit) — for both `CASH` and `WALLET`.
+- **`CASH` only**, and only when `hasExplicitSplit` is true (see below): the *full* `totalAmount` is then **debited** back out via `WalletService.debitProviderForCashCollected` — net wallet effect is `laborTotal - totalAmount`, i.e. "provider keeps their labour, owes the rest to the company," recorded as two ledger rows (a credit then a debit) rather than one net number.
+- **Backward compatibility**: a quote created before this fix has no `labour` on its items at all. `getQuoteLaborBreakdown` falls back to treating each such item's full `unitPrice` as labour (so `laborTotal` still equals the old `totalAmount`) — but `hasExplicitSplit` stays `false` in that case, which **skips the CASH debit step entirely**. This is deliberate: a legacy quote never had a real company/provider split computed, so nothing should be reclaimed from the provider for it — the net result is identical to the pre-fix behavior (full credit, no debit), not a differently-wrong number that happens to be zero.
+- `WALLET` needs no debit step at all, at any point — the company already collected the full amount from the customer's wallet directly, so crediting the provider only `laborTotal` (instead of the old full `totalAmount`) is enough on its own to leave the difference with the company.
 
 ---
 
@@ -270,6 +288,8 @@ src/tests/dbHelpers.ts                  — resetAllTestTables, extended for Quo
 ---
 
 ## 14. Change Log
+
+- **2026-09-27** — Provider payout now reflects labour, not the full quote total (§6.6, §7.1). `completePayment` credits the provider only their `laborTotal` (previously the full `totalAmount` for both methods); `CASH` additionally debits the full amount back out — but only when the quote has a genuine per-item `labour` split (`hasExplicitSplit`), so a pre-existing quote with no stored labour data is completely unaffected (same net full-credit result as before). Added `WalletService.debitProviderForCashCollected` (tx-composable, floor-check skipped via the existing `ORDER_PAYMENT` carve-out). `addQuote` now resolves a tier-aware labour value for catalogue items (`ComplaintService.resolveTierAwareLabour`, the first real consumer of `ProviderProfile.providerTierId`/`ServicePartTierPricing` outside watchtower's own pricing-table display) and requires an explicit `labour` (≤ `unitPrice`) for custom items. Watchtower's `AddQuoteForm` gained a "Provider's Labour" input for custom items.
 
 - **2026-09-16** — `isWithinBusinessHours` (§5.1) now only enforces the 9am-6pm IST window in `NODE_ENV=production` — dev/local/test always allow the popup immediately, at any hour, so QA/demo on the `-dev` UAT environment isn't gated by the clock.
 

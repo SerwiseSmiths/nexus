@@ -44,6 +44,13 @@ export const AddQuoteSchema = z.object({
     // for when the real cost ran higher than the listed catalogue price.
     // Ignored for a custom item (no partId), which is always admin-priced.
     priceOverridden: z.boolean().optional(),
+    // What the provider actually earns from this line item (per unit) — the
+    // rest of unitPrice is the company's (parts cost + margin). Required for
+    // a custom item (no partId), where there's no CMS-defined split to fall
+    // back on — the admin enters price and labour separately. Ignored for a
+    // catalogue item, whose labour is always resolved server-side from the
+    // provider's tier pricing (or the part's own default) — see addQuote.
+    labour: z.number().min(0, 'Labour cannot be negative').optional(),
   })).min(1, 'At least one item is required'),
   notes: z.string().optional(),
 });

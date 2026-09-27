@@ -43,11 +43,41 @@ describe('Quote flow', () => {
       const res = await testRequest(app)
         .post(`/api/complaint/${complaint.id}/quote`)
         .set('Authorization', `Bearer ${token}`)
-        .send({ items: [{ name: 'Compressor replacement', unitPrice: 1500, quantity: 1 }] });
+        .send({ items: [{ name: 'Compressor replacement', unitPrice: 1500, quantity: 1, labour: 700 }] });
 
       expect(res.status).toBe(201);
       expect(res.body.data.quote.totalAmount).toBe(1500);
       expect(res.body.data.complaint.stage).toBe('APPROVAL');
+    });
+
+    it('rejects a custom (non-catalogue) item with no labour with a 400', async () => {
+      const customer = await createUser(Role.CUSTOMER);
+      const provider = await createUser(Role.PROVIDER);
+      const address = await createAddressFor(customer.id);
+      const complaint = await createComplaintFor(customer.id, address.id, { providerId: provider.id, stage: 'ESTIMATION' });
+      const token = signAccessToken(provider);
+
+      const res = await testRequest(app)
+        .post(`/api/complaint/${complaint.id}/quote`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ items: [{ name: 'Compressor replacement', unitPrice: 1500, quantity: 1 }] });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects a custom item whose labour exceeds its unit price with a 400', async () => {
+      const customer = await createUser(Role.CUSTOMER);
+      const provider = await createUser(Role.PROVIDER);
+      const address = await createAddressFor(customer.id);
+      const complaint = await createComplaintFor(customer.id, address.id, { providerId: provider.id, stage: 'ESTIMATION' });
+      const token = signAccessToken(provider);
+
+      const res = await testRequest(app)
+        .post(`/api/complaint/${complaint.id}/quote`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ items: [{ name: 'Compressor replacement', unitPrice: 1500, quantity: 1, labour: 2000 }] });
+
+      expect(res.status).toBe(400);
     });
 
     it('rejects submitting a quote before QR validation with 400', async () => {
@@ -335,6 +365,36 @@ describe('Quote flow', () => {
       expect(providerWallet?.balance).toBe(300);
     });
 
+    it('CASH: with a labour-split quote, credits labour then debits the full cash collected, netting the non-labour amount owed to the company (fixed 2026-09-27 — previously credited the full total, double-counting cash the provider already held)', async () => {
+      const customer = await createUser(Role.CUSTOMER);
+      const provider = await createUser(Role.PROVIDER);
+      const address = await createAddressFor(customer.id);
+      const complaint = await createComplaintFor(customer.id, address.id, { providerId: provider.id, stage: 'PAYMENT' });
+      await prisma.quote.create({
+        data: {
+          complaintId: complaint.id,
+          items: [{ name: 'Compressor replacement', unitPrice: 600, quantity: 1, labour: 300 }],
+          totalAmount: 600,
+        },
+      });
+      const token = signAccessToken(provider);
+
+      const res = await testRequest(app)
+        .patch(`/api/complaint/${complaint.id}/complete-payment`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ method: 'CASH' });
+
+      expect(res.status).toBe(200);
+
+      const providerWallet = await prisma.wallet.findUnique({ where: { userId: provider.id } });
+      expect(providerWallet?.balance).toBe(300 - 600); // credited 300 labour, then debited the full 600 collected in cash
+
+      const ledger = await prisma.walletLedger.findMany({ where: { walletId: providerWallet!.id }, orderBy: { createdAt: 'asc' } });
+      expect(ledger).toHaveLength(2);
+      expect(ledger[0]).toMatchObject({ type: 'CREDIT', amount: 300 });
+      expect(ledger[1]).toMatchObject({ type: 'DEBIT', amount: 600 });
+    });
+
     it('WALLET: debits the customer and credits the provider when balance is sufficient (fixed 2026-09-07)', async () => {
       const customer = await createUser(Role.CUSTOMER);
       const provider = await createUser(Role.PROVIDER);
@@ -358,6 +418,39 @@ describe('Quote flow', () => {
 
       const providerWallet = await prisma.wallet.findUnique({ where: { userId: provider.id } });
       expect(providerWallet?.balance).toBe(300);
+    });
+
+    it('WALLET: with a labour-split quote, credits only labour — the company keeps the rest since it already collected the full amount from the customer\'s wallet (fixed 2026-09-27)', async () => {
+      const customer = await createUser(Role.CUSTOMER);
+      const provider = await createUser(Role.PROVIDER);
+      const address = await createAddressFor(customer.id);
+      const complaint = await createComplaintFor(customer.id, address.id, { providerId: provider.id, stage: 'PAYMENT' });
+      await prisma.quote.create({
+        data: {
+          complaintId: complaint.id,
+          items: [{ name: 'Compressor replacement', unitPrice: 600, quantity: 1, labour: 300 }],
+          totalAmount: 600,
+        },
+      });
+      await prisma.wallet.create({ data: { userId: customer.id, walletType: 'CUSTOMER', balance: 1000 } });
+      const token = signAccessToken(provider);
+
+      const res = await testRequest(app)
+        .patch(`/api/complaint/${complaint.id}/complete-payment`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ method: 'WALLET' });
+
+      expect(res.status).toBe(200);
+
+      const customerWallet = await prisma.wallet.findUnique({ where: { userId: customer.id } });
+      expect(customerWallet?.balance).toBe(400); // full 600 debited from the customer
+
+      const providerWallet = await prisma.wallet.findUnique({ where: { userId: provider.id } });
+      expect(providerWallet?.balance).toBe(300); // only labour credited — no debit needed, company already holds the rest
+
+      const ledger = await prisma.walletLedger.findMany({ where: { walletId: providerWallet!.id } });
+      expect(ledger).toHaveLength(1);
+      expect(ledger[0]).toMatchObject({ type: 'CREDIT', amount: 300 });
     });
 
     it('WALLET: rejects with insufficient balance, and leaves the complaint in PAYMENT with no money moved (fixed 2026-09-07 — previously this was never checked at all)', async () => {

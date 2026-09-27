@@ -255,6 +255,36 @@ function isFilterRelatedQuote(items: unknown): boolean {
   );
 }
 
+// What the provider actually earns across the whole quote — the rest of
+// totalAmount is the company's (parts cost + margin), see addQuote's
+// resolveTierAwareLabour. A quote created before per-item labour tracking
+// existed has no `labour` on its items; for those, each item's full
+// unitPrice counts as labour (the previous full-credit behavior), so this
+// never retroactively short-credits an already-quoted job.
+// `hasExplicitSplit` is true only if at least one item actually carries a
+// stored `labour` value — a fully-legacy quote (every item missing it) is
+// NOT the same as a quote that's genuinely 100% labour: the former never
+// had a company/provider split computed at all, so nothing should be
+// reclaimed from the provider for it (see completePayment's CASH debit,
+// which is gated on this flag, not just on whether the numbers cancel out).
+function getQuoteLaborBreakdown(items: unknown): { laborTotal: number; hasExplicitSplit: boolean } {
+  if (!Array.isArray(items)) return { laborTotal: 0, hasExplicitSplit: false };
+  let laborTotal = 0;
+  let hasExplicitSplit = false;
+  for (const raw of items) {
+    const item = raw as { unitPrice?: unknown; quantity?: unknown; labour?: unknown };
+    const unitPrice = typeof item.unitPrice === 'number' ? item.unitPrice : 0;
+    const quantity  = typeof item.quantity  === 'number' ? item.quantity  : 1;
+    if (typeof item.labour === 'number') {
+      hasExplicitSplit = true;
+      laborTotal += item.labour * quantity;
+    } else {
+      laborTotal += unitPrice * quantity;
+    }
+  }
+  return { laborTotal, hasExplicitSplit };
+}
+
 // ---------------------------------------------------------------------------
 // ComplaintService
 // ---------------------------------------------------------------------------
@@ -861,9 +891,28 @@ export class ComplaintService {
 
   // ─── Quote ────────────────────────────────────────────────────────────────
 
+  // A provider's tier can override what they earn for a given catalogue part
+  // (ServicePartTierPricing); falls back to the part's own base labour
+  // (provider_cut, passed in as `baseLabour`) when the provider has no tier,
+  // or the tier has no override row for this part, or that row's `labour`
+  // is null (an override can set salesPrice/expense without touching labour).
+  private static async resolveTierAwareLabour(
+    servicePartId: string,
+    providerTierId: string | null,
+    baseLabour: number,
+  ): Promise<number> {
+    if (!providerTierId) return baseLabour;
+    const override = await prisma.servicePartTierPricing.findUnique({
+      where: { servicePartId_providerTierId: { servicePartId, providerTierId } },
+    });
+    if (!override || override.isDeleted || override.labour == null) return baseLabour;
+    return override.labour;
+  }
+
   static async addQuote({ complaintId, requesterId, asAdmin, items, notes }: AddQuoteInput) {
     const complaint = await prisma.complaint.findFirst({
       where: { id: complaintId, ...(asAdmin ? {} : { providerId: requesterId }), isDeleted: false },
+      include: { provider: { include: { providerProfile: { select: { providerTierId: true } } } } },
     });
     if (!complaint) throw new ApiError(404, 'Complaint not found or not assigned to you');
 
@@ -882,6 +931,8 @@ export class ComplaintService {
       throw new ApiError(400, 'Quote can only be submitted after QR validation');
     }
 
+    const providerTierId = complaint.provider?.providerProfile?.providerTierId ?? null;
+
     // Catalogue items (partId set) get their name/price re-resolved from the
     // CMS *now*, at estimation time — the client's own unitPrice is never
     // trusted for these, since it may have been read from a stale cache.
@@ -894,12 +945,35 @@ export class ComplaintService {
     // real cost ran higher than the listed catalogue price — the client's
     // unitPrice is trusted verbatim in that case (still snapshotted the same
     // way, just sourced from the admin's own number instead of the CMS).
+    //
+    // `labour` — what the provider actually earns from the item, the rest
+    // being the company's (parts cost + margin) — is resolved the same way
+    // regardless of priceOverridden (overriding the sale price doesn't
+    // change what the work itself is worth): the assigned provider's tier
+    // pricing override if one exists, else the part's own base labour
+    // (`provider_cut`). A custom item (no partId) has no CMS-defined split,
+    // so the caller must supply both price and labour explicitly.
     const snapshotItems = await Promise.all(
       items.map(async (item) => {
-        if (!item.partId || item.priceOverridden) return item;
+        if (!item.partId) {
+          if (typeof item.labour !== 'number') {
+            throw new ApiError(400, `labour is required for a custom item ("${item.name}")`);
+          }
+          if (item.labour > item.unitPrice) {
+            throw new ApiError(400, `labour cannot exceed the unit price for "${item.name}"`);
+          }
+          return item;
+        }
+
         const part = await StrapiService.fetchPartByDocumentId(item.partId);
-        if (!part) return item;
-        return { ...item, name: part.name, unitPrice: part.face_value };
+        const labour = await ComplaintService.resolveTierAwareLabour(
+          item.partId,
+          providerTierId,
+          part?.provider_cut ?? 0,
+        );
+
+        if (item.priceOverridden || !part) return { ...item, labour };
+        return { ...item, name: part.name, unitPrice: part.face_value, labour };
       }),
     );
 
@@ -1530,6 +1604,7 @@ export class ComplaintService {
     }
 
     const totalAmount = complaint.quote?.totalAmount ?? 0;
+    const { laborTotal, hasExplicitSplit } = getQuoteLaborBreakdown(complaint.quote?.items);
     const paymentProvider = method === 'CASH' ? PaymentProvider.CASH : PaymentProvider.RAZORPAY;
 
     const updated = await prisma.$transaction(
@@ -1550,11 +1625,27 @@ export class ComplaintService {
           include: COMPLAINT_INCLUDE,
         });
 
-        // Credit provider wallet — routed through WalletService for the same
-        // serializable-isolation / audit-ledger guarantees every other wallet
-        // mutation gets, composed inside this same transaction.
-        if (totalAmount > 0) {
-          await WalletService.creditProviderEarnings(providerId, totalAmount, complaintId, paymentProvider, tx);
+        // The provider only ever keeps their labour — everything else is the
+        // company's (parts cost + margin). Routed through WalletService for
+        // the same serializable-isolation / audit-ledger guarantees every
+        // other wallet mutation gets, composed inside this same transaction.
+        if (laborTotal > 0) {
+          await WalletService.creditProviderEarnings(providerId, laborTotal, complaintId, paymentProvider, tx);
+        }
+
+        // CASH only, and only when the quote actually has a real labour
+        // split (hasExplicitSplit) — the provider collected the *full*
+        // amount directly from the customer on-site (unlike WALLET, where
+        // the company already holds 100% of it via the debit above), so the
+        // full amount is debited back out; net effect is credit(labour) +
+        // debit(total) = -(total - labour), i.e. "provider keeps labour,
+        // owes the rest to the company." A legacy quote with no stored
+        // per-item labour (hasExplicitSplit false) never had this split
+        // computed at all — it gets no debit, preserving the old
+        // full-credit-only behavior exactly rather than reclaiming money
+        // nobody ever priced out as non-labour.
+        if (method === 'CASH' && hasExplicitSplit && totalAmount > 0) {
+          await WalletService.debitProviderForCashCollected(providerId, totalAmount, complaintId, tx);
         }
 
         return updatedComplaint;
@@ -1575,7 +1666,7 @@ export class ComplaintService {
       toStage: ComplaintStage.COMPLETED,
       actorId: providerId,
       actorRole: Role.PROVIDER,
-      metadata: { method, totalAmount },
+      metadata: { method, totalAmount, laborTotal },
     });
 
     emit(() =>

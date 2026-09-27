@@ -163,7 +163,7 @@ export class WalletService {
     });
   }
 
-  static async debitWallet(input: DebitWalletInput) {
+  private static async debitWalletTx(tx: TxClient, input: DebitWalletInput) {
     const {
       userId,
       amount,
@@ -176,52 +176,84 @@ export class WalletService {
 
     if (amount <= 0) throw new ApiError(400, 'Amount must be greater than 0');
 
+    const wallet = await tx.wallet.findUnique({ where: { userId, isDeleted: false } });
+    if (!wallet) throw new ApiError(404, 'Wallet not found');
+    if (!wallet.isActive) throw new ApiError(403, 'Wallet is inactive');
+
+    if (
+      updateBalance &&
+      source !== WalletLedgerSource.ORDER_PAYMENT &&
+      wallet.balance < amount
+    ) {
+      throw new ApiError(400, 'Insufficient wallet balance');
+    }
+
+    const openingBalance = wallet.balance;
+    const closingBalance = updateBalance ? openingBalance - amount : openingBalance;
+
+    const [updatedWallet, ledger] = await Promise.all([
+      updateBalance
+        ? tx.wallet.update({
+            where: { id: wallet.id },
+            data:  { balance: closingBalance },
+          })
+        : Promise.resolve(wallet),
+      tx.walletLedger.create({
+        data: {
+          walletId:       wallet.id,
+          userId,
+          type:           WalletLedgerType.DEBIT,
+          source,
+          amount,
+          openingBalance,
+          closingBalance,
+          updateBalance,
+          ...(refId           && { refId }),
+          ...(meta            && { meta: meta as Prisma.InputJsonValue }),
+          ...(paymentProvider && { paymentProvider }),
+        },
+      }),
+    ]);
+
+    return { wallet: updatedWallet, ledger };
+  }
+
+  static async debitWallet(input: DebitWalletInput) {
     // Serializable isolation prevents concurrent overdrafts
     return prisma.$transaction(
-      async (tx) => {
-        const wallet = await tx.wallet.findUnique({ where: { userId, isDeleted: false } });
-        if (!wallet) throw new ApiError(404, 'Wallet not found');
-        if (!wallet.isActive) throw new ApiError(403, 'Wallet is inactive');
-
-        if (
-          updateBalance &&
-          source !== WalletLedgerSource.ORDER_PAYMENT &&
-          wallet.balance < amount
-        ) {
-          throw new ApiError(400, 'Insufficient wallet balance');
-        }
-
-        const openingBalance = wallet.balance;
-        const closingBalance = updateBalance ? openingBalance - amount : openingBalance;
-
-        const [updatedWallet, ledger] = await Promise.all([
-          updateBalance
-            ? tx.wallet.update({
-                where: { id: wallet.id },
-                data:  { balance: closingBalance },
-              })
-            : Promise.resolve(wallet),
-          tx.walletLedger.create({
-            data: {
-              walletId:       wallet.id,
-              userId,
-              type:           WalletLedgerType.DEBIT,
-              source,
-              amount,
-              openingBalance,
-              closingBalance,
-              updateBalance,
-              ...(refId           && { refId }),
-              ...(meta            && { meta: meta as Prisma.InputJsonValue }),
-              ...(paymentProvider && { paymentProvider }),
-            },
-          }),
-        ]);
-
-        return { wallet: updatedWallet, ledger };
-      },
+      (tx) => WalletService.debitWalletTx(tx, input),
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
+  }
+
+  // Sanctioned entry point for reclaiming a CASH payment the provider
+  // collected directly from the customer on-site (see
+  // ComplaintService.completePayment, which passes the full quote total as
+  // `amount` and has already separately credited the provider's labour
+  // share). The provider physically holds the full amount, but only their
+  // labour is rightfully theirs — this debits the full amount back out so
+  // the net wallet effect is "provider keeps labour, owes the rest to the
+  // company." Deliberately allowed to go
+  // negative (no balance floor) via the same
+  // ORDER_PAYMENT carve-out debitWallet already uses for its own floor
+  // check — this is an IOU being recorded, not a real-time spend that must
+  // be affordable right now; the manual payout process reconciles it.
+  // Requires the caller's own transaction client, same reasoning as
+  // debitCustomerForComplaintPayment.
+  static async debitProviderForCashCollected(
+    providerId: string,
+    amount: number,
+    complaintId: string,
+    tx: TxClient,
+  ) {
+    if (amount <= 0) return;
+    return WalletService.debitWalletTx(tx, {
+      userId: providerId,
+      amount,
+      source: WalletLedgerSource.ORDER_PAYMENT,
+      refId: complaintId,
+      meta: { reason: 'cash_collected_offset' },
+    });
   }
 
   private static displayName(user: { firstName: string | null; lastName: string | null; phoneNo: string }): string {
