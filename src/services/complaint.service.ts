@@ -9,6 +9,7 @@ import { describeZodError } from '@/utils/zodError';
 import { RealtimeService } from '@/services/realtime.service';
 import { NotificationService } from '@/services/notification.service';
 import { TelegramService } from '@/services/telegram.service';
+import { WhatsAppService } from '@/services/whatsapp.service';
 import { WalletService } from '@/services/wallet.service';
 import { StrapiService } from '@/services/strapi.service';
 import { DeviceTypeGroupService } from '@/services/device-type-group.service';
@@ -1311,6 +1312,46 @@ export class ComplaintService {
     );
 
     return updated;
+  }
+
+  // ─── WhatsApp Nudge ───────────────────────────────────────────────────────
+
+  /** Admin-triggered WhatsApp message asking the customer to track an open
+   *  ticket in the app. Closed (COMPLETED/REJECTED) tickets can't be nudged. */
+  static async nudgeCustomerOnWhatsApp(complaintId: string, adminId: string) {
+    const complaint = await prisma.complaint.findFirst({
+      where:   { id: complaintId, isDeleted: false },
+      include: { user: { select: { phoneNo: true } } },
+    });
+    if (!complaint) throw new ApiError(404, 'Complaint not found');
+
+    if (complaint.stage === ComplaintStage.COMPLETED || complaint.stage === ComplaintStage.REJECTED) {
+      throw new ApiError(400, 'Cannot nudge the customer on a closed complaint');
+    }
+    if (!complaint.user.phoneNo) throw new ApiError(400, 'Customer has no phone number');
+
+    // Same short ID watchtower and radix show, so the customer quotes the one admins/providers see.
+    const ticketId = `#${complaint.id.slice(-5)}`;
+    const text = [
+      `Service Ticket Raised - ${ticketId}`,
+      'Track your ticket status and get real-time updates directly in the mobile app.',
+      '',
+      'Playstore App - https://play.google.com/store/apps/details?id=com.serwise',
+      '',
+      'Thanks,',
+      'Serwise Team.',
+    ].join('\n');
+
+    await WhatsAppService.sendText(complaint.user.phoneNo, text);
+
+    await logComplaintEvent({
+      complaintId,
+      event:     'WHATSAPP_NUDGE_SENT',
+      actorId:   adminId,
+      actorRole: Role.ADMIN,
+    });
+
+    return { message: 'WhatsApp nudge sent to customer' };
   }
 
   static async requestEntranceScan(complaintId: string, providerId: string) {

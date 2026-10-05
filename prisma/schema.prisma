@@ -800,3 +800,20 @@ model bundle_patches {
   @@index([bundle_id])
   @@index([base_bundle_id])
 }
+
+
+// ─── WhatsApp (Baileys) session ──────────────────────────────────────────────
+
+// Key/value store for the linked-device WhatsApp Web session WhatsAppService
+// uses to send messages (Baileys auth state: "creds" + signal keys like
+// "session-<jid>", "pre-key-<id>"). Lives in the DB because nexus runs on
+// Vercel with no persistent disk. value is BufferJSON-encoded JSON.
+// Also holds the "__send_lock__" row that serializes concurrent sends.
+model WhatsAppAuthKey {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String
+  isDeleted Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

@@ -591,6 +591,39 @@ router.post(
   ComplaintController.requestEntranceScan,
 );
 
+// ─── WhatsApp Nudge ───────────────────────────────────────────────────────────
+
+/**
+ * @swagger
+ * /complaint/{id}/whatsapp-nudge:
+ *   post:
+ *     summary: Send the customer a WhatsApp message to track their ticket in the app (ADMIN)
+ *     description: >
+ *       Sent from the WhatsApp number linked to this environment via
+ *       `yarn whatsapp:pair` (Baileys linked-device session stored in
+ *       WhatsAppAuthKey). Only for open complaints — logged as
+ *       WHATSAPP_NUDGE_SENT on the complaint timeline.
+ *     tags: [Complaint]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+ *     responses:
+ *       200: { description: WhatsApp nudge sent }
+ *       400: { description: Complaint is closed, or customer has no phone number }
+ *       404: { description: Complaint not found, or customer's number is not on WhatsApp }
+ *       429: { description: Another WhatsApp send is in progress — retry }
+ *       502: { description: WhatsApp connection or send failed }
+ *       503: { description: No WhatsApp number linked for this environment, or it was unlinked }
+ *       504: { description: Timed out connecting to WhatsApp }
+ */
+router.post(
+  '/:id/whatsapp-nudge',
+  auth,
+  authorize([Role.ADMIN]),
+  ComplaintController.nudgeOnWhatsApp,
+);
+
 // ─── Reopen ───────────────────────────────────────────────────────────────────
 
 /**
