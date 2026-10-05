@@ -308,6 +308,17 @@ export class ComplaintController {
     }
   }
 
+  // ─── WhatsApp Nudge ───────────────────────────────────────────────────────
+
+  static async nudgeOnWhatsApp(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const result = await ComplaintService.nudgeCustomerOnWhatsApp(req.params.id as string, req.user!.id);
+      return ApiResponse.success(res, 200, result.message, null);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   // ─── Reopen ───────────────────────────────────────────────────────────────
 
   static async reopenComplaint(req: AuthRequest, res: Response, next: NextFunction) {

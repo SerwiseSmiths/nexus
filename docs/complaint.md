@@ -196,6 +196,18 @@ Expired/wrong-token failures are both plain 400s with distinct messages (`"Inval
 
 `POST /:id/reopen` (customer or admin via `asAdmin`), only from `COMPLETED`/`REJECTED`. Creates a **new** `Complaint` row with `parentId` pointing at the original, fresh `stage: ENTRANCE`, copies device/deviceKey, defaults title/notes/address from the original unless overridden. **No cap on chain depth** — a complaint can be reopened indefinitely (not fixed; a judgment call left open, see §11).
 
+### 9.1 WhatsApp nudge (added 2026-10-05)
+
+`POST /:id/whatsapp-nudge` (ADMIN only, driven by watchtower's "Nudge on WhatsApp" button in the ticket table + detail panel). Sends the customer a fixed "Service Ticket Raised - #<last 5 of id> … track in the app + Play Store link" text. Refuses `COMPLETED`/`REJECTED` complaints (400). Unlike Telegram it **throws** on failure because it's an explicit admin action. Writes a `WHATSAPP_NUDGE_SENT` `ComplaintLog` row on success.
+
+**How it sends, on Vercel, without the official API:** `WhatsAppService` embeds **Baileys** (the WhatsApp Web linked-device engine Evolution API is built on) instead of calling a separate always-on Evolution server — Vercel can't host one. Each send: take the `__send_lock__` lease row (only one connection per linked device may be open; concurrent sends wait up to 20s, else 429), load the session from `WhatsAppAuthKey`, connect (≤25s), `onWhatsApp` check (404 if the number isn't on WhatsApp), send, wait 2s, disconnect, **flush every queued key write** (an unsaved signal key corrupts the session), release the lock. Baileys is ESM-only and loaded via a real dynamic `import()` from nexus's CommonJS build.
+
+**Connecting the sender number (watchtower header, `src/routes/whatsapp.route.ts`, ADMIN):** `GET /whatsapp/status` → `{ connected, number, pairing, lastError }` read straight from the DB (no WhatsApp connection). `POST /whatsapp/pair { phone }` returns an 8-char code immediately and keeps the WhatsApp socket open in the background via `waitUntil` (`@vercel/functions`) for up to 2 min while the admin types it on the phone (Linked devices → "Link with phone number instead"); progress lives in the `__pair_state__` row and watchtower polls `/status`. `POST /whatsapp/logout` unlinks the device from the phone and clears the session. Each environment's DB has its own linked number, so dev and prod watchtower manage theirs independently (the same number may be linked in both). If a send finds the device was unlinked from the phone, nexus clears the session so watchtower shows "Connect" again. The phone must open WhatsApp at least every ~14 days or WhatsApp unlinks its devices.
+
+**Vercel duration:** the background link needs ~2.5 min in one invocation — relies on the nexus project's Fluid compute default (300s max). The legacy `builds` config in `vercel.json` can't set `maxDuration` itself.
+
+**Risks:** unofficial protocol — WhatsApp can ban numbers that send unsolicited bulk messages; use a dedicated business number. Connect-per-send is ~5–10s per nudge.
+
 ---
 
 ## 10. Error Handling & Message Catalog
@@ -288,6 +300,8 @@ src/tests/dbHelpers.ts                  — resetAllTestTables, extended for Quo
 ---
 
 ## 14. Change Log
+
+- **2026-10-05** — Added `POST /complaint/:id/whatsapp-nudge` (§9.1): admin-triggered WhatsApp message sent in-process via Baileys (runs on Vercel; replaces the first draft that called an external Evolution Go server), new `WhatsAppService` + `WhatsAppAuthStore`, `WhatsAppAuthKey` model (migration `20261005000000_add_whatsapp_auth_key`), `/whatsapp/status|pair|logout` endpoints so the number is connected/switched from watchtower's tickets header (no CLI), `WHATSAPP_NUDGE_SENT` log event. No tests yet; no rate limit (an admin can nudge the same customer repeatedly).
 
 - **2026-09-27** — Provider payout now reflects labour, not the full quote total (§6.6, §7.1). `completePayment` credits the provider only their `laborTotal` (previously the full `totalAmount` for both methods); `CASH` additionally debits the full amount back out — but only when the quote has a genuine per-item `labour` split (`hasExplicitSplit`), so a pre-existing quote with no stored labour data is completely unaffected (same net full-credit result as before). Added `WalletService.debitProviderForCashCollected` (tx-composable, floor-check skipped via the existing `ORDER_PAYMENT` carve-out). `addQuote` now resolves a tier-aware labour value for catalogue items (`ComplaintService.resolveTierAwareLabour`, the first real consumer of `ProviderProfile.providerTierId`/`ServicePartTierPricing` outside watchtower's own pricing-table display) and requires an explicit `labour` (≤ `unitPrice`) for custom items. Watchtower's `AddQuoteForm` gained a "Provider's Labour" input for custom items.
 

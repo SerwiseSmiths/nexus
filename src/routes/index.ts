@@ -18,6 +18,7 @@ import paymentRoutes from './payment.route';
 import subscriptionRoutes from './subscription.route';
 import otaRoutes from './ota.route';
 import cacheRoutes from './cache.route';
+import whatsappRoutes from './whatsapp.route';
 import { RealtimeService } from '@/services/realtime.service';
 import { getSupabaseConfig } from '@/configs/supabase.config';
 
@@ -42,6 +43,7 @@ router.use('/payments', paymentRoutes);
 router.use('/subscription', subscriptionRoutes);
 router.use('/ota', otaRoutes);
 router.use('/cache', cacheRoutes);
+router.use('/whatsapp', whatsappRoutes);
 
 // ─── Dev-only: test Supabase broadcast ───────────────────────────────────────
 // POST /api/debug/broadcast  { userId, event?, payload? }
