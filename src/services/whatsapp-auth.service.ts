@@ -17,9 +17,10 @@ let baileysPromise: Promise<Baileys> | null = null;
 export const loadBaileys = (): Promise<Baileys> => (baileysPromise ??= import('baileys'));
 
 const CREDS_KEY = 'creds';
-// "__"-prefixed rows are bookkeeping, not session data — clear() leaves them alone.
+// Bookkeeping rows, not session data — clear() leaves them alone.
 const LOCK_KEY = '__send_lock__';
 const PAIR_STATE_KEY = '__pair_state__';
+const BOOKKEEPING_KEYS = [LOCK_KEY, PAIR_STATE_KEY];
 
 export interface WhatsAppPairState {
   status:    'WAITING' | 'CONNECTED' | 'FAILED';
@@ -97,7 +98,9 @@ export class WhatsAppAuthStore {
   /** Forgets the current session (soft-delete) — before linking afresh, on logout, or
    *  once WhatsApp reports the device was unlinked from the phone. */
   static async clear(): Promise<void> {
-    await prisma.whatsAppAuthKey.updateMany({ where: { NOT: { key: { startsWith: '__' } } }, data: { isDeleted: true } });
+    // Exact keys, not `startsWith: '__'` — Prisma turns that into LIKE '__%', where
+    // "_" is a wildcard, so it matched (and protected) every row.
+    await prisma.whatsAppAuthKey.updateMany({ where: { key: { notIn: BOOKKEEPING_KEYS }, isDeleted: false }, data: { isDeleted: true } });
   }
 
   /** The linked account's JID (e.g. "919876543210:12@s.whatsapp.net"), or null if
