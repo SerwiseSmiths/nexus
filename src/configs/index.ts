@@ -20,6 +20,12 @@ const envSchema = z.object({
   OLA_MAPS_API_KEY: z.string().min(1),
   SUPABASE_URL: z.string().url(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
+  // Secret channel watchtower listens on for every realtime event (see
+  // RealtimeService.emitToAdmin). Broadcast channels are joinable by anyone holding
+  // the anon key, so this must be unguessable — unset disables the admin mirror.
+  // No length check here on purpose: envSchema.parse runs at boot, and a bad value for an
+  // optional live-feed must never stop nexus from starting (see emitToAdmin instead).
+  SUPABASE_ADMIN_CHANNEL: z.string().optional(),
   STRAPI_URL: z.string().url().default('http://localhost:1337'),
   STRAPI_API_TOKEN: z.string().optional(),
   // TTL for the in-memory cache in front of watchtower's CMS reads (strapi.service.ts) —
@@ -111,6 +117,7 @@ export const initializeConfig = async () => {
     supabase: {
       url: parsed.SUPABASE_URL,
       serviceRoleKey: parsed.SUPABASE_SERVICE_ROLE_KEY,
+      adminChannel: parsed.SUPABASE_ADMIN_CHANNEL,
     },
     strapiUrl: parsed.STRAPI_URL,
     strapiApiToken: parsed.STRAPI_API_TOKEN,
@@ -154,7 +161,7 @@ export const startConfigPolling = (): void => {
       const parsed = envSchema.parse(resolvedEnv);
 
       Object.assign(config, {
-        supabase:    { url: parsed.SUPABASE_URL, serviceRoleKey: parsed.SUPABASE_SERVICE_ROLE_KEY },
+        supabase:    { url: parsed.SUPABASE_URL, serviceRoleKey: parsed.SUPABASE_SERVICE_ROLE_KEY, adminChannel: parsed.SUPABASE_ADMIN_CHANNEL },
         cloudinary:  { cloudName: parsed.CLOUDINARY_CLOUD_NAME, apiKey: parsed.CLOUDINARY_API_KEY, apiSecret: parsed.CLOUDINARY_API_SECRET },
         hanuOtp:     { apiKey: parsed.HANUOTP_API_KEY, templateSid: parsed.HANUOTP_TEMPLATE_SID },
         razorpay:    { keyId: parsed.RAZORPAY_KEY_ID, keySecret: parsed.RAZORPAY_KEY_SECRET, webhookSecret: parsed.RAZORPAY_WEBHOOK_SECRET },

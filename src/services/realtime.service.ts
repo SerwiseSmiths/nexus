@@ -12,6 +12,9 @@ import { sleep } from '@/utils/sleep';
 // Client apps subscribe to:
 //   - channel "user:{userId}"     → customer events
 //   - channel "provider:{userId}" → provider events
+//   - channel "admin:{SUPABASE_ADMIN_CHANNEL}" → watchtower; gets ONE copy of
+//     every event above (see emitToAdmin), never two when an event goes to
+//     both the customer and the provider.
 // ---------------------------------------------------------------------------
 
 interface BroadcastPayload {
@@ -131,9 +134,53 @@ export class RealtimeService {
     });
   }
 
-  // ─── Per-user / per-provider emit ─────────────────────────────────────────
+  // ─── Per-user / per-provider / admin emit ─────────────────────────────────
 
+  // Public entry points for one-off events (controllers, debug route): deliver
+  // to the app AND mirror to watchtower. The complaint-specific methods below
+  // use deliverTo* + a single emitToAdmin instead, so watchtower never sees an
+  // event twice just because both parties received it.
   static async emitToUser(
+    userId: string,
+    event: string,
+    payload: BroadcastPayload,
+  ): Promise<void> {
+    await Promise.allSettled([
+      this.deliverToUser(userId, event, payload),
+      this.emitToAdmin(event, { ...payload, target: { role: 'CUSTOMER', id: userId } }),
+    ]);
+  }
+
+  static async emitToProvider(
+    providerId: string,
+    event: string,
+    payload: BroadcastPayload,
+  ): Promise<void> {
+    await Promise.allSettled([
+      this.deliverToProvider(providerId, event, payload),
+      this.emitToAdmin(event, { ...payload, target: { role: 'PROVIDER', id: providerId } }),
+    ]);
+  }
+
+  // Watchtower's live feed. Skipped (not an error) when SUPABASE_ADMIN_CHANNEL
+  // isn't configured — admins then just fall back to the page cache TTL.
+  static async emitToAdmin(event: string, payload: BroadcastPayload): Promise<void> {
+    const { adminChannel } = getSupabaseConfig();
+    if (!adminChannel) return;
+    // A short name is guessable — refuse to broadcast customer data on it.
+    if (adminChannel.length < 16) {
+      console.warn('[Realtime] SUPABASE_ADMIN_CHANNEL is shorter than 16 chars — admin feed disabled');
+      return;
+    }
+    try {
+      await this.broadcast(`admin:${adminChannel}`, event, payload);
+      console.log(`[Realtime] ✓ ${event} delivered — admin`);
+    } catch (err: any) {
+      console.error(`[Realtime] ✗ ${event} FAILED — admin`, { message: err?.message });
+    }
+  }
+
+  private static async deliverToUser(
     userId: string,
     event: string,
     payload: BroadcastPayload,
@@ -150,7 +197,7 @@ export class RealtimeService {
     }
   }
 
-  static async emitToProvider(
+  private static async deliverToProvider(
     providerId: string,
     event: string,
     payload: BroadcastPayload,
@@ -172,10 +219,11 @@ export class RealtimeService {
   static async emitComplaintCreated(complaint: BroadcastPayload): Promise<void> {
     const payload = { complaint };
     await Promise.allSettled([
-      this.emitToUser(complaint.userId as string, 'complaint:created', payload),
+      this.deliverToUser(complaint.userId as string, 'complaint:created', payload),
       complaint.providerId
-        ? this.emitToProvider(complaint.providerId as string, 'complaint:created', payload)
+        ? this.deliverToProvider(complaint.providerId as string, 'complaint:created', payload)
         : Promise.resolve(),
+      this.emitToAdmin('complaint:created', payload),
     ]);
   }
 
@@ -186,10 +234,11 @@ export class RealtimeService {
   ): Promise<void> {
     const payload = { complaint, oldStage, newStage };
     await Promise.allSettled([
-      this.emitToUser(complaint.userId as string, 'complaint:stage_changed', payload),
+      this.deliverToUser(complaint.userId as string, 'complaint:stage_changed', payload),
       complaint.providerId
-        ? this.emitToProvider(complaint.providerId as string, 'complaint:stage_changed', payload)
+        ? this.deliverToProvider(complaint.providerId as string, 'complaint:stage_changed', payload)
         : Promise.resolve(),
+      this.emitToAdmin('complaint:stage_changed', payload),
     ]);
   }
 
@@ -197,31 +246,33 @@ export class RealtimeService {
   // business-hours window — the customer-facing event still fires, but the
   // provider's own `complaint:assigned` channel (which drives the full-screen
   // popup in radix) is held back until ComplaintService.claimPendingAssignment
-  // delivers it once the provider next opens the app.
+  // delivers it once the provider next opens the app. Watchtower always hears
+  // about it immediately.
   static async emitProviderAssigned(complaint: BroadcastPayload, notifyProvider = true): Promise<void> {
     const payload = { complaint };
     await Promise.allSettled([
-      this.emitToUser(complaint.userId as string, 'complaint:provider_assigned', payload),
+      this.deliverToUser(complaint.userId as string, 'complaint:provider_assigned', payload),
       complaint.providerId && notifyProvider
-        ? this.emitToProvider(complaint.providerId as string, 'complaint:assigned', payload)
+        ? this.deliverToProvider(complaint.providerId as string, 'complaint:assigned', payload)
         : Promise.resolve(),
+      this.emitToAdmin('complaint:provider_assigned', payload),
     ]);
   }
 
   static async emitProviderAccepted(complaint: BroadcastPayload): Promise<void> {
-    await this.emitToUser(
-      complaint.userId as string,
-      'complaint:provider_accepted',
-      { complaint },
-    );
+    const payload = { complaint };
+    await Promise.allSettled([
+      this.deliverToUser(complaint.userId as string, 'complaint:provider_accepted', payload),
+      this.emitToAdmin('complaint:provider_accepted', payload),
+    ]);
   }
 
   static async emitProviderRejected(complaint: BroadcastPayload): Promise<void> {
-    await this.emitToUser(
-      complaint.userId as string,
-      'complaint:provider_rejected',
-      { complaint },
-    );
+    const payload = { complaint };
+    await Promise.allSettled([
+      this.deliverToUser(complaint.userId as string, 'complaint:provider_rejected', payload),
+      this.emitToAdmin('complaint:provider_rejected', payload),
+    ]);
   }
 
   // The provider gets this too — a quote can be entered by an admin from
@@ -230,26 +281,35 @@ export class RealtimeService {
   static async emitQuoteAdded(complaint: BroadcastPayload): Promise<void> {
     const payload = { complaint };
     await Promise.allSettled([
-      this.emitToUser(complaint.userId as string, 'complaint:quote_added', payload),
+      this.deliverToUser(complaint.userId as string, 'complaint:quote_added', payload),
       complaint.providerId
-        ? this.emitToProvider(complaint.providerId as string, 'complaint:quote_added', payload)
+        ? this.deliverToProvider(complaint.providerId as string, 'complaint:quote_added', payload)
         : Promise.resolve(),
+      this.emitToAdmin('complaint:quote_added', payload),
     ]);
   }
 
   // Generic "this complaint changed, refetch it" signal for the assigned
   // provider — for changes that aren't a stage transition (devices linked,
   // complaint deleted, a silent out-of-hours assignment, …). Radix only
-  // invalidates its caches on this; it never shows UI for it.
+  // invalidates its caches on this; it never shows UI for it. Watchtower gets
+  // it even when no provider is assigned yet (it refreshes the tickets table).
   static async emitComplaintUpdated(complaint: BroadcastPayload): Promise<void> {
-    if (!complaint.providerId) return;
-    await this.emitToProvider(complaint.providerId as string, 'complaint:updated', { complaint });
+    const payload = { complaint };
+    await Promise.allSettled([
+      complaint.providerId
+        ? this.deliverToProvider(complaint.providerId as string, 'complaint:updated', payload)
+        : Promise.resolve(),
+      this.emitToAdmin('complaint:updated', payload),
+    ]);
   }
 
   // Sent to the provider a complaint was just taken away from (admin
   // reassigned it to someone else) so it drops off their list immediately.
+  // Not mirrored to watchtower — the same reassignment already reaches it as
+  // complaint:provider_assigned.
   static async emitProviderUnassigned(providerId: string, complaint: BroadcastPayload): Promise<void> {
-    await this.emitToProvider(providerId, 'complaint:unassigned', { complaint });
+    await this.deliverToProvider(providerId, 'complaint:unassigned', { complaint });
   }
 
   // ─── Provider account events (admin edits from watchtower) ────────────────
@@ -274,28 +334,32 @@ export class RealtimeService {
   // from watchtower) — sent to every provider with an open job for that
   // customer so their appliance-select / work-history lists refresh.
   static async emitCustomerDevicesUpdated(providerIds: string[], customerId: string): Promise<void> {
-    await Promise.allSettled(
-      providerIds.map(id => this.emitToProvider(id, 'devices:updated', { customerId })),
-    );
+    await Promise.allSettled([
+      ...providerIds.map(id => this.deliverToProvider(id, 'devices:updated', { customerId })),
+      this.emitToAdmin('devices:updated', { customerId }),
+    ]);
   }
 
   static async emitQuoteResponded(
     complaint: BroadcastPayload,
     approved: boolean,
   ): Promise<void> {
-    if (complaint.providerId) {
-      await this.emitToProvider(complaint.providerId as string, 'complaint:quote_responded', {
-        complaint,
-        approved,
-      });
-    }
+    const payload = { complaint, approved };
+    await Promise.allSettled([
+      complaint.providerId
+        ? this.deliverToProvider(complaint.providerId as string, 'complaint:quote_responded', payload)
+        : Promise.resolve(),
+      this.emitToAdmin('complaint:quote_responded', payload),
+    ]);
   }
 
+  // Deliberately not mirrored to watchtower — the payload carries the
+  // customer's entry-QR token, and there's no admin-side state to refresh.
   static async emitQrScanRequested(
     complaint: BroadcastPayload,
     token: string,
   ): Promise<void> {
-    await this.emitToUser(complaint.userId as string, 'complaint:qr_scan_requested', {
+    await this.deliverToUser(complaint.userId as string, 'complaint:qr_scan_requested', {
       complaint,
       token,
     });
@@ -307,6 +371,9 @@ export class RealtimeService {
     userId: string,
     payload: BroadcastPayload,
   ): Promise<void> {
+    // Watchtower isn't racing a screen navigation — tell it right away.
+    void this.emitToAdmin('payment:verified', { ...payload, target: { role: 'CUSTOMER', id: userId } });
+
     // Wait 10 s before broadcasting — gives the client time to navigate to
     // PaymentVerificationScreen and join the Supabase channel.
     console.log(`[Realtime] payment:verified queued — userId=${userId}`);

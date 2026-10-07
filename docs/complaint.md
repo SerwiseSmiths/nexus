@@ -286,7 +286,7 @@ src/services/complaint.service.ts       — all business logic: state machine, a
                                            business-hours deferral (§5.1), CMS price snapshot (§6.2), audit log (§6.5)
 src/services/wallet.service.ts          — debitCustomerForComplaintPayment (added 2026-09-12), creditProviderEarnings
 src/services/strapi.service.ts          — fetchPartByDocumentId, used by addQuote's CMS price snapshot (§6.2)
-src/services/realtime.service.ts        — emitProviderAssigned's notifyProvider gate (§5.1)
+src/services/realtime.service.ts        — emitProviderAssigned's notifyProvider gate (§5.1); emitToAdmin watchtower mirror (§14, 2026-10-06)
 src/jobs/assignmentDeadlineSweep.ts     — 5-minute setInterval driving reassignExpiredPendingAssignments (§5.1)
 src/types/complaint.types.ts            — Zod schemas (all fields now have user-facing messages) + input/body types
 src/utils/zodError.ts                   — describeZodError, shared with device.service.ts
@@ -300,6 +300,8 @@ src/tests/dbHelpers.ts                  — resetAllTestTables, extended for Quo
 ---
 
 ## 14. Change Log
+
+- **2026-10-06** — Watchtower live feed. `RealtimeService.emitToAdmin` broadcasts every complaint/payment/provider-account event once to `admin:{SUPABASE_ADMIN_CHANNEL}` (new optional env; unset disables it). Complaint emitters now call private `deliverToUser`/`deliverToProvider` plus a single `emitToAdmin`, so an event sent to both parties reaches watchtower once; the public `emitToUser`/`emitToProvider` mirror automatically with a `target: { role, id }` field. Not mirrored: `complaint:qr_scan_requested` (carries the customer's entry token) and `complaint:unassigned` (covered by `complaint:provider_assigned`). `complaint:updated` now reaches watchtower even with no provider assigned; `provider_accepted`/`provider_rejected` now reach it at all (previously customer-only). Watchtower side: `src/components/RealtimeFeed.tsx`.
 
 - **2026-10-05** — Added `POST /complaint/:id/whatsapp-nudge` (§9.1): admin-triggered WhatsApp message sent in-process via Baileys (runs on Vercel; replaces the first draft that called an external Evolution Go server), new `WhatsAppService` + `WhatsAppAuthStore`, `WhatsAppAuthKey` model (migration `20261005000000_add_whatsapp_auth_key`), `/whatsapp/status|pair|logout` endpoints so the number is connected/switched from watchtower's tickets header (no CLI), `WHATSAPP_NUDGE_SENT` log event. No tests yet; no rate limit (an admin can nudge the same customer repeatedly).
 
