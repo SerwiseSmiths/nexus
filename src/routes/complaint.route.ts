@@ -327,7 +327,10 @@ router.post('/:id/assignment-action', ComplaintController.respondToAssignmentWit
  *     description: >
  *       Automatically moves the complaint to APPROVAL stage. An ADMIN can enter a
  *       quote from watchtower (e.g. a phoned-in estimate) — the complaint must
- *       already have a provider assigned.
+ *       already have a provider assigned. While the complaint is in APPROVAL with
+ *       a PENDING quote, an ADMIN (only) may call this again to edit that quote —
+ *       stage stays APPROVAL, logged as QUOTE_UPDATED; 403 for a provider, 409 if
+ *       the customer responded first.
  *     tags: [Complaint]
  *     security:
  *       - bearerAuth: []

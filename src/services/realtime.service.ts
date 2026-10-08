@@ -278,8 +278,10 @@ export class RealtimeService {
   // The provider gets this too — a quote can be entered by an admin from
   // watchtower on the provider's behalf, and radix needs to see the complaint
   // move to APPROVAL without the provider having submitted anything itself.
-  static async emitQuoteAdded(complaint: BroadcastPayload): Promise<void> {
-    const payload = { complaint };
+  // `revised` = an admin edited a pending quote (same event name, so existing
+  // app listeners just refetch it; watchtower words its toast differently).
+  static async emitQuoteAdded(complaint: BroadcastPayload, revised = false): Promise<void> {
+    const payload = { complaint, revised };
     await Promise.allSettled([
       this.deliverToUser(complaint.userId as string, 'complaint:quote_added', payload),
       complaint.providerId

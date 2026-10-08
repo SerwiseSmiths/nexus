@@ -913,7 +913,10 @@ export class ComplaintService {
   static async addQuote({ complaintId, requesterId, asAdmin, items, notes }: AddQuoteInput) {
     const complaint = await prisma.complaint.findFirst({
       where: { id: complaintId, ...(asAdmin ? {} : { providerId: requesterId }), isDeleted: false },
-      include: { provider: { include: { providerProfile: { select: { providerTierId: true } } } } },
+      include: {
+        provider: { include: { providerProfile: { select: { providerTierId: true } } } },
+        quote: { select: { status: true, totalAmount: true } },
+      },
     });
     if (!complaint) throw new ApiError(404, 'Complaint not found or not assigned to you');
 
@@ -925,7 +928,17 @@ export class ComplaintService {
       throw new ApiError(400, 'Assign a provider before adding a quote');
     }
 
-    if (
+    // Revision (§6.7): an admin may edit a quote that's still awaiting the
+    // customer's decision — e.g. the customer asked for a cheaper option over
+    // the phone. Providers can't; once submitted, their quote is the admin's
+    // to adjust.
+    const isRevision = complaint.stage === ComplaintStage.APPROVAL;
+    if (isRevision) {
+      if (!asAdmin) throw new ApiError(403, 'Only an admin can edit a quote awaiting approval');
+      if (complaint.quote?.status !== QuoteStatus.PENDING) {
+        throw new ApiError(400, 'Only a quote still awaiting approval can be edited');
+      }
+    } else if (
       complaint.stage !== ComplaintStage.QR_VALIDATED &&
       complaint.stage !== ComplaintStage.ESTIMATION
     ) {
@@ -980,37 +993,57 @@ export class ComplaintService {
 
     const totalAmount = snapshotItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
 
-    const quote = await prisma.quote.upsert({
-      where:  { complaintId },
-      update: { items: snapshotItems, totalAmount, notes: notes ?? null, status: QuoteStatus.PENDING },
-      create: { complaintId, items: snapshotItems, totalAmount, notes: notes ?? null },
-    });
+    let quote;
+    if (isRevision) {
+      // Gated on the same "still pending, still in APPROVAL" condition checked
+      // above — the customer can approve/reject between that read and this
+      // write, and an unguarded write would silently flip their decision back
+      // to PENDING with a different total.
+      const { count } = await prisma.quote.updateMany({
+        where: { complaintId, status: QuoteStatus.PENDING, complaint: { stage: ComplaintStage.APPROVAL } },
+        data:  { items: snapshotItems, totalAmount, notes: notes ?? null },
+      });
+      if (count === 0) {
+        throw new ApiError(409, 'The customer responded to this quote before your edit was saved — refresh to see its status');
+      }
+      quote = await prisma.quote.findUniqueOrThrow({ where: { complaintId } });
+    } else {
+      quote = await prisma.quote.upsert({
+        where:  { complaintId },
+        update: { items: snapshotItems, totalAmount, notes: notes ?? null, status: QuoteStatus.PENDING },
+        create: { complaintId, items: snapshotItems, totalAmount, notes: notes ?? null },
+      });
+    }
 
-    // Move stage to APPROVAL so customer can review
-    const updatedComplaint = await prisma.complaint.update({
-      where: { id: complaintId },
-      data:  { stage: ComplaintStage.APPROVAL },
-      include: COMPLAINT_INCLUDE,
-    });
+    // Move stage to APPROVAL so customer can review (a revision is already there)
+    const updatedComplaint = isRevision
+      ? await prisma.complaint.findUniqueOrThrow({ where: { id: complaintId }, include: COMPLAINT_INCLUDE })
+      : await prisma.complaint.update({
+          where: { id: complaintId },
+          data:  { stage: ComplaintStage.APPROVAL },
+          include: COMPLAINT_INCLUDE,
+        });
 
     await logComplaintEvent({
       complaintId,
-      event: 'QUOTE_ADDED',
+      event: isRevision ? 'QUOTE_UPDATED' : 'QUOTE_ADDED',
       fromStage: complaint.stage,
       toStage: ComplaintStage.APPROVAL,
       actorId: requesterId,
       actorRole: asAdmin ? Role.ADMIN : Role.PROVIDER,
-      metadata: { totalAmount },
+      metadata: isRevision ? { totalAmount, previousTotal: complaint.quote?.totalAmount ?? null } : { totalAmount },
     });
 
     emit(() =>
-      RealtimeService.emitQuoteAdded(updatedComplaint as unknown as Record<string, unknown>),
+      RealtimeService.emitQuoteAdded(updatedComplaint as unknown as Record<string, unknown>, isRevision),
     );
     emit(() =>
       NotificationService.sendToUser({
         userId:      complaint.userId,
-        title:       'Quote Ready',
-        body:        `Your provider submitted a quote of ₹${totalAmount.toFixed(2)}. Please review and approve.`,
+        title:       isRevision ? 'Quote Updated' : 'Quote Ready',
+        body:        isRevision
+          ? `Your quote was updated to ₹${totalAmount.toFixed(2)}. Please review and approve.`
+          : `Your provider submitted a quote of ₹${totalAmount.toFixed(2)}. Please review and approve.`,
         type:        NotificationType.COMPLAINT,
         complaintId,
         metadata:    { totalAmount },
