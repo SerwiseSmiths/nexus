@@ -209,6 +209,10 @@ router.patch(
  * /complaint/{id}/assign:
  *   patch:
  *     summary: Assign a provider to a complaint (ADMIN)
+ *     description: >
+ *       Normal (default) — the provider must accept or reject (popup in radix, held
+ *       until 9am outside business hours). `force: true` — assigned as already
+ *       accepted: no popup, no deferral, the provider can't reject it (409).
  *     tags: [Complaint]
  *     security:
  *       - bearerAuth: []
@@ -223,6 +227,7 @@ router.patch(
  *             required: [providerId]
  *             properties:
  *               providerId: { type: string, format: uuid }
+ *               force: { type: boolean, default: false }
  *     responses:
  *       200: { description: Provider assigned }
  */
@@ -327,7 +332,10 @@ router.post('/:id/assignment-action', ComplaintController.respondToAssignmentWit
  *     description: >
  *       Automatically moves the complaint to APPROVAL stage. An ADMIN can enter a
  *       quote from watchtower (e.g. a phoned-in estimate) — the complaint must
- *       already have a provider assigned.
+ *       already have a provider assigned. While the complaint is in APPROVAL with
+ *       a PENDING quote, an ADMIN (only) may call this again to edit that quote —
+ *       stage stays APPROVAL, logged as QUOTE_UPDATED; 403 for a provider, 409 if
+ *       the customer responded first.
  *     tags: [Complaint]
  *     security:
  *       - bearerAuth: []

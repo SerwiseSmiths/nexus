@@ -113,6 +113,10 @@ The full-screen "New Job" popup in radix is only allowed to fire **live** betwee
 
 ---
 
+### 5.2 Force assignment (admin, added 2026-10-08)
+
+`PATCH /complaint/:id/assign` takes optional `force` (default `false` = the normal flow above). With `force: true` the job is accepted on the provider's behalf: `providerAccepted = true`, `providerAcceptedAt = now`, `assignmentPending = false`, no deadline — so §5.1's deferral and sweep never apply. The provider gets **no** `complaint:assigned` realtime event and **no** data-only `complaint_assigned` push (the two things radix's accept/reject popup/ringer key on) — instead a silent `complaint:updated` refetch plus a plain tray notification ("Job Assigned to You", skipped outside business hours). Customer notifications and the watchtower feed are the same as a normal assignment. Logged as `PROVIDER_ASSIGNED` with `metadata.forced: true` (no `PROVIDER_ACCEPTED` row — the provider didn't accept anything). `rejectAssignment` now 409s once `providerAccepted` is true, so a force-assigned provider can't decline (radix only ever calls it from the pre-accept popup, so normal flows are unaffected). Watchtower: the Reassign popover's "Normal / Force" toggle.
+
 ## 6. Quote Flow
 
 `Quote` is 1:1 with `Complaint` (unique `complaintId`). `addQuote` (assigned provider, **or ADMIN acting on the provider's behalf — added 2026-09-13, see §6.1**; must be `QR_VALIDATED`/`ESTIMATION`) upserts the quote, computes `totalAmount` from line items, force-advances the complaint to `APPROVAL`.
@@ -144,7 +148,7 @@ Watchtower's `AddQuoteForm` doesn't submit directly — clicking "Submit Quote" 
 
 ### 6.5 Complaint audit log (`ComplaintLog`, added 2026-09-13)
 
-Every meaningful complaint mutation writes one row to `ComplaintLog` (`complaintId`, `event`, `fromStage`/`toStage`, `actorId`/`actorRole` — `null` for system actions, `metadata` Json, `createdAt`) via `logComplaintEvent` — always awaited inline, **never** via the fire-and-forget `emit()` helper used for notifications/realtime, since a log entry recording what happened is part of the state change itself, not a best-effort side effect. Events written today: `CREATED`, `STAGE_CHANGED` (from `updateStage`, `validateEntryQr`, `completeService`, `completePayment`), `PROVIDER_ASSIGNED`, `PROVIDER_ACCEPTED`, `PROVIDER_REJECTED`, `QUOTE_ADDED`, `QUOTE_APPROVED`, `QUOTE_REJECTED`, `REOPENED`, `ASSIGNMENT_POPUP_DELIVERED`, `ASSIGNMENT_EXPIRED_REASSIGNING` (§5.1).
+Every meaningful complaint mutation writes one row to `ComplaintLog` (`complaintId`, `event`, `fromStage`/`toStage`, `actorId`/`actorRole` — `null` for system actions, `metadata` Json, `createdAt`) via `logComplaintEvent` — always awaited inline, **never** via the fire-and-forget `emit()` helper used for notifications/realtime, since a log entry recording what happened is part of the state change itself, not a best-effort side effect. Events written today: `CREATED`, `STAGE_CHANGED` (from `updateStage`, `validateEntryQr`, `completeService`, `completePayment`), `PROVIDER_ASSIGNED`, `PROVIDER_ACCEPTED`, `PROVIDER_REJECTED`, `QUOTE_ADDED`, `QUOTE_UPDATED` (§6.7), `QUOTE_APPROVED`, `QUOTE_REJECTED`, `REOPENED`, `ASSIGNMENT_POPUP_DELIVERED`, `ASSIGNMENT_EXPIRED_REASSIGNING` (§5.1).
 
 `COMPLAINT_INCLUDE.logs` (ordered oldest-first) means every complaint read (list or detail) already carries its full timeline — no separate endpoint. Watchtower's ticket detail "Ticket Activity" tab reads real per-event timestamps off this instead of approximating every stage's date from the complaint's single `updatedAt`.
 
@@ -157,6 +161,12 @@ Each quote item can carry a `labour` value (per unit, same convention as `unitPr
 - **Catalogue item** (`partId` set): `labour` is always resolved server-side in `addQuote` via `ComplaintService.resolveTierAwareLabour(servicePartId, providerTierId, baseLabour)` — the assigned provider's `ServicePartTierPricing` override for that part (its `labour` field) if one exists and isn't `null`, else the part's own base labour (CMS `provider_cut` — despite the internal field name, this is what watchtower's pricing table labels "Labour"; see `watchtower/src/app/pricing/PricingView.tsx`'s `resolvePricing`/Gross-Profit = `salesPrice - expense - labour` for the parallel client-side display logic). Resolved the same way regardless of `priceOverridden` — overriding the sale price doesn't change what the work itself is worth. The client's own `labour` value is never trusted for a catalogue item, same trust model as `unitPrice`/`name` (§6.2).
 - **Custom item** (no `partId`): there's no CMS-defined split, so the caller must supply both `unitPrice` (what the customer sees) and `labour` (what the provider earns) explicitly — `addQuote` 400s if `labour` is missing or exceeds `unitPrice`. Watchtower's `AddQuoteForm` exposes this as a dedicated "Provider's Labour" input next to the price field for a custom item only.
 - `ProviderProfile.providerTierId` (manually assigned by an admin in watchtower) had **zero consumers anywhere in nexus** before this change — `ServicePartTierPricing` existed purely for watchtower's own pricing-table display. This is the first place a provider's tier actually affects a real money computation.
+
+### 6.7 Admin can edit a pending quote (added 2026-10-08)
+
+`POST /complaint/:id/quote` also accepts the complaint in `APPROVAL` when the caller is ADMIN and the quote is still `PENDING` — a revision (e.g. the customer asked for a cheaper option). Same item rules as §6.1-6.6 (CMS re-resolution, `priceOverridden`, labour). Differences from a first submission: stage stays `APPROVAL`; the write is `quote.updateMany({ where: { status: PENDING, complaint: { stage: APPROVAL } } })` and 409s on count 0, so a customer approve/reject landing between the read and the write is never silently reverted; logged as `QUOTE_UPDATED` with `{ totalAmount, previousTotal }`; customer gets a "Quote Updated" notification; realtime reuses `complaint:quote_added` with `revised: true`. Providers get 403 (once submitted, the quote is the admin's to adjust). Watchtower: the Approve/Reject buttons open a review popup (`QuoteReviewModal.tsx`) with the full quote and an "Edit Quote" button that opens `AddQuoteForm` prefilled.
+
+**Known gap**: `respondToQuote` itself isn't gated the same way — if a customer approves at the exact instant an admin's edit commits, the approval applies to the *revised* total (the customer's screen may still have shown the old one).
 
 ---
 
@@ -286,7 +296,7 @@ src/services/complaint.service.ts       — all business logic: state machine, a
                                            business-hours deferral (§5.1), CMS price snapshot (§6.2), audit log (§6.5)
 src/services/wallet.service.ts          — debitCustomerForComplaintPayment (added 2026-09-12), creditProviderEarnings
 src/services/strapi.service.ts          — fetchPartByDocumentId, used by addQuote's CMS price snapshot (§6.2)
-src/services/realtime.service.ts        — emitProviderAssigned's notifyProvider gate (§5.1)
+src/services/realtime.service.ts        — emitProviderAssigned's notifyProvider gate (§5.1); emitToAdmin watchtower mirror (§14, 2026-10-06)
 src/jobs/assignmentDeadlineSweep.ts     — 5-minute setInterval driving reassignExpiredPendingAssignments (§5.1)
 src/types/complaint.types.ts            — Zod schemas (all fields now have user-facing messages) + input/body types
 src/utils/zodError.ts                   — describeZodError, shared with device.service.ts
@@ -300,6 +310,12 @@ src/tests/dbHelpers.ts                  — resetAllTestTables, extended for Quo
 ---
 
 ## 14. Change Log
+
+- **2026-10-08** — Force assignment (§5.2): `assignProvider` `force` flag (accepted on the provider's behalf, no popup/deferral); `rejectAssignment` now rejects (409) an already-accepted job. 2 new tests in `provider-assignment.test.ts` (105 total).
+
+- **2026-10-08** — Admin can edit a pending quote (§6.7): `addQuote` accepts `APPROVAL` + `PENDING` for ADMIN only, guarded write, new `QUOTE_UPDATED` log event, "Quote Updated" customer notification, `emitQuoteAdded(complaint, revised)`. 3 new tests in `quote-and-payment.test.ts` (103 total in the complaint suite).
+
+- **2026-10-06** — Watchtower live feed. `RealtimeService.emitToAdmin` broadcasts every complaint/payment/provider-account event once to `admin:{SUPABASE_ADMIN_CHANNEL}` (new optional env; unset disables it). Complaint emitters now call private `deliverToUser`/`deliverToProvider` plus a single `emitToAdmin`, so an event sent to both parties reaches watchtower once; the public `emitToUser`/`emitToProvider` mirror automatically with a `target: { role, id }` field. Not mirrored: `complaint:qr_scan_requested` (carries the customer's entry token) and `complaint:unassigned` (covered by `complaint:provider_assigned`). `complaint:updated` now reaches watchtower even with no provider assigned; `provider_accepted`/`provider_rejected` now reach it at all (previously customer-only). Watchtower side: `src/components/RealtimeFeed.tsx`.
 
 - **2026-10-05** — Added `POST /complaint/:id/whatsapp-nudge` (§9.1): admin-triggered WhatsApp message sent in-process via Baileys (runs on Vercel; replaces the first draft that called an external Evolution Go server), new `WhatsAppService` + `WhatsAppAuthStore`, `WhatsAppAuthKey` model (migration `20261005000000_add_whatsapp_auth_key`), `/whatsapp/status|pair|logout` endpoints so the number is connected/switched from watchtower's tickets header (no CLI), `WHATSAPP_NUDGE_SENT` log event. No tests yet; no rate limit (an admin can nudge the same customer repeatedly).
 

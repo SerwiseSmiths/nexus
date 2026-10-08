@@ -5,4 +5,5 @@ import { config } from '@/configs';
 export const getSupabaseConfig = () => ({
   url: config.supabase.url as string,
   serviceRoleKey: config.supabase.serviceRoleKey as string,
+  adminChannel: config.supabase.adminChannel as string | undefined,
 });

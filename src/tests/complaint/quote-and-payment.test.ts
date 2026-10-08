@@ -80,6 +80,66 @@ describe('Quote flow', () => {
       expect(res.status).toBe(400);
     });
 
+    describe('revising a pending quote (§6.7)', () => {
+      const revisedItems = [{ name: 'Gas top-up', unitPrice: 600, quantity: 2, labour: 250 }];
+
+      it('lets an admin edit a quote awaiting approval — stage stays APPROVAL, logged as QUOTE_UPDATED', async () => {
+        const customer = await createUser(Role.CUSTOMER);
+        const provider = await createUser(Role.PROVIDER);
+        const admin = await createUser(Role.ADMIN);
+        const address = await createAddressFor(customer.id);
+        const complaint = await createComplaintFor(customer.id, address.id, { providerId: provider.id, stage: 'APPROVAL', totalAmount: 1500 });
+
+        const res = await testRequest(app)
+          .post(`/api/complaint/${complaint.id}/quote`)
+          .set('Authorization', `Bearer ${signAccessToken(admin)}`)
+          .send({ items: revisedItems, notes: 'Customer chose the cheaper fix' });
+
+        expect(res.status).toBe(201);
+        expect(res.body.data.quote.totalAmount).toBe(1200);
+        expect(res.body.data.quote.status).toBe('PENDING');
+        expect(res.body.data.complaint.stage).toBe('APPROVAL');
+
+        const log = await prisma.complaintLog.findFirst({ where: { complaintId: complaint.id, event: 'QUOTE_UPDATED' } });
+        expect(log?.metadata).toEqual({ totalAmount: 1200, previousTotal: 1500 });
+      });
+
+      it('rejects the assigned provider editing a quote awaiting approval with 403', async () => {
+        const customer = await createUser(Role.CUSTOMER);
+        const provider = await createUser(Role.PROVIDER);
+        const address = await createAddressFor(customer.id);
+        const complaint = await createComplaintFor(customer.id, address.id, { providerId: provider.id, stage: 'APPROVAL', totalAmount: 1500 });
+
+        const res = await testRequest(app)
+          .post(`/api/complaint/${complaint.id}/quote`)
+          .set('Authorization', `Bearer ${signAccessToken(provider)}`)
+          .send({ items: revisedItems });
+
+        expect(res.status).toBe(403);
+        const quote = await prisma.quote.findUnique({ where: { complaintId: complaint.id } });
+        expect(quote?.totalAmount).toBe(1500);
+      });
+
+      it('rejects an admin edit once the customer has already approved (stage moved on) with 400', async () => {
+        const customer = await createUser(Role.CUSTOMER);
+        const provider = await createUser(Role.PROVIDER);
+        const admin = await createUser(Role.ADMIN);
+        const address = await createAddressFor(customer.id);
+        const complaint = await createComplaintFor(customer.id, address.id, { providerId: provider.id, stage: 'IN_PROGRESS', totalAmount: 1500 });
+        await prisma.quote.update({ where: { complaintId: complaint.id }, data: { status: 'APPROVED' } });
+
+        const res = await testRequest(app)
+          .post(`/api/complaint/${complaint.id}/quote`)
+          .set('Authorization', `Bearer ${signAccessToken(admin)}`)
+          .send({ items: revisedItems });
+
+        expect(res.status).toBe(400);
+        const quote = await prisma.quote.findUnique({ where: { complaintId: complaint.id } });
+        expect(quote?.status).toBe('APPROVED');
+        expect(quote?.totalAmount).toBe(1500);
+      });
+    });
+
     it('rejects submitting a quote before QR validation with 400', async () => {
       const customer = await createUser(Role.CUSTOMER);
       const provider = await createUser(Role.PROVIDER);
