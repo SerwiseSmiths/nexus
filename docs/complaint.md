@@ -113,6 +113,10 @@ The full-screen "New Job" popup in radix is only allowed to fire **live** betwee
 
 ---
 
+### 5.2 Force assignment (admin, added 2026-10-08)
+
+`PATCH /complaint/:id/assign` takes optional `force` (default `false` = the normal flow above). With `force: true` the job is accepted on the provider's behalf: `providerAccepted = true`, `providerAcceptedAt = now`, `assignmentPending = false`, no deadline — so §5.1's deferral and sweep never apply. The provider gets **no** `complaint:assigned` realtime event and **no** data-only `complaint_assigned` push (the two things radix's accept/reject popup/ringer key on) — instead a silent `complaint:updated` refetch plus a plain tray notification ("Job Assigned to You", skipped outside business hours). Customer notifications and the watchtower feed are the same as a normal assignment. Logged as `PROVIDER_ASSIGNED` with `metadata.forced: true` (no `PROVIDER_ACCEPTED` row — the provider didn't accept anything). `rejectAssignment` now 409s once `providerAccepted` is true, so a force-assigned provider can't decline (radix only ever calls it from the pre-accept popup, so normal flows are unaffected). Watchtower: the Reassign popover's "Normal / Force" toggle.
+
 ## 6. Quote Flow
 
 `Quote` is 1:1 with `Complaint` (unique `complaintId`). `addQuote` (assigned provider, **or ADMIN acting on the provider's behalf — added 2026-09-13, see §6.1**; must be `QR_VALIDATED`/`ESTIMATION`) upserts the quote, computes `totalAmount` from line items, force-advances the complaint to `APPROVAL`.
@@ -306,6 +310,8 @@ src/tests/dbHelpers.ts                  — resetAllTestTables, extended for Quo
 ---
 
 ## 14. Change Log
+
+- **2026-10-08** — Force assignment (§5.2): `assignProvider` `force` flag (accepted on the provider's behalf, no popup/deferral); `rejectAssignment` now rejects (409) an already-accepted job. 2 new tests in `provider-assignment.test.ts` (105 total).
 
 - **2026-10-08** — Admin can edit a pending quote (§6.7): `addQuote` accepts `APPROVAL` + `PENDING` for ADMIN only, guarded write, new `QUOTE_UPDATED` log event, "Quote Updated" customer notification, `emitQuoteAdded(complaint, revised)`. 3 new tests in `quote-and-payment.test.ts` (103 total in the complaint suite).
 

@@ -31,6 +31,10 @@ export const UpdateStageSchema = z.object({
 
 export const AssignProviderSchema = z.object({
   providerId: z.string().uuid('Invalid provider ID'),
+  // Force assignment (admin only — the route is ADMIN-gated): the job is
+  // treated as already accepted, so the provider gets no accept/reject popup
+  // and can't decline it. Default false = the normal accept/reject flow.
+  force: z.boolean().optional().default(false),
 });
 
 export const AddQuoteSchema = z.object({
@@ -135,7 +139,9 @@ export interface UpdateStageInput extends UpdateStageDto {
   requesterRole: Role;
 }
 
-export interface AssignProviderInput extends AssignProviderDto {
+export interface AssignProviderInput extends Omit<AssignProviderDto, 'force'> {
+  // Optional here — internal auto-assign callers never force.
+  force?:       boolean;
   complaintId: string;
   // Who triggered this assignment — an admin via the API, or omitted when
   // the system auto-assigned (createComplaint, rejectAssignment's

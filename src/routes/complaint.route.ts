@@ -209,6 +209,10 @@ router.patch(
  * /complaint/{id}/assign:
  *   patch:
  *     summary: Assign a provider to a complaint (ADMIN)
+ *     description: >
+ *       Normal (default) — the provider must accept or reject (popup in radix, held
+ *       until 9am outside business hours). `force: true` — assigned as already
+ *       accepted: no popup, no deferral, the provider can't reject it (409).
  *     tags: [Complaint]
  *     security:
  *       - bearerAuth: []
@@ -223,6 +227,7 @@ router.patch(
  *             required: [providerId]
  *             properties:
  *               providerId: { type: string, format: uuid }
+ *               force: { type: boolean, default: false }
  *     responses:
  *       200: { description: Provider assigned }
  */

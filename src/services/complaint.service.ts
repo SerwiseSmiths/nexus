@@ -559,7 +559,7 @@ export class ComplaintService {
 
   // ─── Provider Assignment ──────────────────────────────────────────────────
 
-  static async assignProvider({ complaintId, providerId, actorId, actorRole }: AssignProviderInput) {
+  static async assignProvider({ complaintId, providerId, actorId, actorRole, force = false }: AssignProviderInput) {
     const complaint = await prisma.complaint.findFirst({
       where: { id: complaintId, isDeleted: false },
     });
@@ -579,16 +579,26 @@ export class ComplaintService {
 
     const updated = await prisma.complaint.update({
       where: { id: complaintId },
-      data: {
-        providerId,
-        providerAccepted:   false,
-        providerAcceptedAt: null,
-        // Outside 9am-6pm IST, hold the job-assignment popup until the
-        // provider next opens the app (claimPendingAssignment) instead of
-        // alerting them immediately.
-        assignmentPending:  !withinHours,
-        assignmentDeadline: withinHours ? null : nextAssignmentDeadline(now),
-      },
+      data: force
+        ? {
+            // Force assignment (§5.2): accepted on the provider's behalf —
+            // no popup to defer, no deadline for the sweep to act on.
+            providerId,
+            providerAccepted:   true,
+            providerAcceptedAt: now,
+            assignmentPending:  false,
+            assignmentDeadline: null,
+          }
+        : {
+            providerId,
+            providerAccepted:   false,
+            providerAcceptedAt: null,
+            // Outside 9am-6pm IST, hold the job-assignment popup until the
+            // provider next opens the app (claimPendingAssignment) instead of
+            // alerting them immediately.
+            assignmentPending:  !withinHours,
+            assignmentDeadline: withinHours ? null : nextAssignmentDeadline(now),
+          },
       include: COMPLAINT_INCLUDE,
     });
 
@@ -597,12 +607,9 @@ export class ComplaintService {
       event: 'PROVIDER_ASSIGNED',
       actorId: actorId ?? null,
       actorRole: actorRole ?? null,
-      metadata: { providerId, withinBusinessHours: withinHours },
+      metadata: { providerId, withinBusinessHours: withinHours, forced: force },
     });
 
-    emit(() =>
-      RealtimeService.emitProviderAssigned(updated as unknown as Record<string, unknown>, withinHours),
-    );
     // Reassigned away from someone else (admin reassign from watchtower) —
     // tell the previous provider so it drops off their list right away.
     const previousProviderId = complaint.providerId;
@@ -614,6 +621,44 @@ export class ComplaintService {
         ),
       );
     }
+
+    if (force) {
+      // Customer + watchtower hear about the assignment as usual; the provider
+      // gets NO `complaint:assigned` (that drives radix's accept/reject popup),
+      // just a silent refetch so the job appears in their list as accepted.
+      emit(() => RealtimeService.emitProviderAssigned(updated as unknown as Record<string, unknown>, false));
+      emit(() => RealtimeService.emitComplaintUpdated(updated as unknown as Record<string, unknown>));
+      // Plain tray notification — deliberately not dataOnly and without
+      // `event: 'complaint_assigned'`, which is what radix's full-screen
+      // popup/ringer keys on (JobAssignmentPushReceiver). Skipped outside
+      // business hours rather than buzzing a phone overnight; the job is in
+      // their list either way.
+      if (withinHours) {
+        emit(() =>
+          NotificationService.sendToUser({
+            userId:      providerId,
+            title:       'Job Assigned to You',
+            body:        `You have been assigned: "${complaint.title}". Open the app for details.`,
+            type:        NotificationType.COMPLAINT,
+            complaintId,
+          }),
+        );
+      }
+      emit(() =>
+        NotificationService.sendToUser({
+          userId:      complaint.userId,
+          title:       'Provider Assigned',
+          body:        'A provider has been assigned to your complaint.',
+          type:        NotificationType.COMPLAINT,
+          complaintId,
+        }),
+      );
+      return updated;
+    }
+
+    emit(() =>
+      RealtimeService.emitProviderAssigned(updated as unknown as Record<string, unknown>, withinHours),
+    );
     // Outside business hours the 'complaint:assigned' popup is held back
     // (see emitProviderAssigned), but the new provider's list/task count
     // should still refresh silently if the app happens to be open.
@@ -798,6 +843,10 @@ export class ComplaintService {
       where: { id: complaintId, providerId, isDeleted: false },
     });
     if (!complaint) throw new ApiError(404, 'Complaint not found or not assigned to you');
+    // Covers force-assigned jobs (§5.2) too — those are accepted on the
+    // provider's behalf and can't be declined. Same check the token path
+    // (respondToAssignmentWithToken) already makes.
+    if (complaint.providerAccepted) throw new ApiError(409, 'You have already accepted this job');
 
     const updated = await prisma.complaint.update({
       where: { id: complaintId },

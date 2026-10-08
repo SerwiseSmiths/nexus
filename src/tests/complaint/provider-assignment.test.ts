@@ -11,6 +11,8 @@ jest.mock('@/services/realtime.service', () => ({
     emitProviderAssigned: jest.fn().mockResolvedValue(undefined),
     emitProviderAccepted: jest.fn().mockResolvedValue(undefined),
     emitProviderRejected: jest.fn().mockResolvedValue(undefined),
+    emitProviderUnassigned: jest.fn().mockResolvedValue(undefined),
+    emitComplaintUpdated: jest.fn().mockResolvedValue(undefined),
   },
 }));
 jest.mock('@/services/notification.service', () => ({
@@ -58,6 +60,60 @@ describe('Provider assignment', () => {
       expect(res.status).toBe(200);
       expect(res.body.data.complaint.providerId).toBe(provider.id);
       expect(res.body.data.complaint.providerAccepted).toBe(false);
+    });
+
+    describe('force assignment (§5.2)', () => {
+      it('assigns as already accepted, with no accept/reject popup pushed to the provider', async () => {
+        const { RealtimeService } = jest.requireMock('@/services/realtime.service');
+        const { NotificationService } = jest.requireMock('@/services/notification.service');
+        jest.clearAllMocks();
+
+        const customer = await createUser(Role.CUSTOMER);
+        const provider = await createUser(Role.PROVIDER);
+        const admin = await createUser(Role.ADMIN);
+        const address = await createAddressFor(customer.id);
+        const complaint = await createComplaintFor(customer.id, address.id);
+
+        const res = await testRequest(app)
+          .patch(`/api/complaint/${complaint.id}/assign`)
+          .set('Authorization', `Bearer ${signAccessToken(admin)}`)
+          .send({ providerId: provider.id, force: true });
+
+        expect(res.status).toBe(200);
+        expect(res.body.data.complaint.providerId).toBe(provider.id);
+        expect(res.body.data.complaint.providerAccepted).toBe(true);
+        expect(res.body.data.complaint.assignmentPending).toBe(false);
+
+        await wait(50);
+        // notifyProvider=false → no `complaint:assigned` popup event for radix.
+        expect(RealtimeService.emitProviderAssigned).toHaveBeenCalledWith(expect.anything(), false);
+        const pushes = NotificationService.sendToUser.mock.calls.map(([arg]: [{ dataOnly?: boolean; metadata?: { event?: string } }]) => arg);
+        expect(pushes.some((p: { dataOnly?: boolean; metadata?: { event?: string } }) => p.dataOnly || p.metadata?.event === 'complaint_assigned')).toBe(false);
+
+        const log = await prisma.complaintLog.findFirst({ where: { complaintId: complaint.id, event: 'PROVIDER_ASSIGNED' } });
+        expect(log?.metadata).toMatchObject({ providerId: provider.id, forced: true });
+      });
+
+      it('a force-assigned provider cannot reject the job (409)', async () => {
+        const customer = await createUser(Role.CUSTOMER);
+        const provider = await createUser(Role.PROVIDER);
+        const admin = await createUser(Role.ADMIN);
+        const address = await createAddressFor(customer.id);
+        const complaint = await createComplaintFor(customer.id, address.id);
+
+        await testRequest(app)
+          .patch(`/api/complaint/${complaint.id}/assign`)
+          .set('Authorization', `Bearer ${signAccessToken(admin)}`)
+          .send({ providerId: provider.id, force: true });
+
+        const res = await testRequest(app)
+          .patch(`/api/complaint/${complaint.id}/reject-assignment`)
+          .set('Authorization', `Bearer ${signAccessToken(provider)}`);
+
+        expect(res.status).toBe(409);
+        const after = await prisma.complaint.findUnique({ where: { id: complaint.id } });
+        expect(after?.providerId).toBe(provider.id);
+      });
     });
 
     it('rejects assigning to a closed complaint with 400', async () => {
