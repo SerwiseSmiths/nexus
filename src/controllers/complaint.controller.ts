@@ -14,6 +14,7 @@ import {
   ValidateQrSchema,
   ReopenComplaintSchema,
   CompletePaymentSchema,
+  RecordCashPaymentSchema,
 } from '@/types/complaint.types';
 
 export class ComplaintController {
@@ -266,6 +267,32 @@ export class ComplaintController {
       });
 
       return ApiResponse.success(res, 200, 'Payment completed successfully', { complaint });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getPaymentQr(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const qr = await ComplaintService.getPaymentQr(req.params.id as string, req.user!.id);
+      return ApiResponse.success(res, 200, 'Payment QR ready', { qr });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async recordCashPayment(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const parsed = RecordCashPaymentSchema.safeParse(req.body ?? {});
+      if (!parsed.success) return ApiResponse.error(res, 400, describeZodError(parsed.error), parsed.error.issues);
+
+      const complaint = await ComplaintService.recordCashPayment({
+        complaintId: req.params.id as string,
+        adminId:     req.user!.id,
+        ...parsed.data,
+      });
+
+      return ApiResponse.success(res, 200, 'Cash payment recorded', { complaint });
     } catch (error) {
       next(error);
     }

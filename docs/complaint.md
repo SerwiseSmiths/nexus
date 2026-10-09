@@ -65,6 +65,8 @@ Mounted at `/api/complaint` (singular — not `/complaints`). All in `src/routes
 | `PATCH /:id/quote/respond` | `auth`, `[CUSTOMER, ADMIN]` | `respondToQuote` |
 | `PATCH /:id/device` | `auth`, `[CUSTOMER, PROVIDER, ADMIN]` | `linkDevice` |
 | `PATCH /:id/complete-payment` | `auth`, `[PROVIDER]` | `completePayment` |
+| `POST /:id/payment-qr` | `auth`, `[PROVIDER]` | `getPaymentQr` (§7.2) |
+| `POST /:id/record-cash` | `auth`, `[ADMIN]` | `recordCashPayment` (§7.3) |
 | `POST /:id/qr/generate` | `auth`, `[CUSTOMER]` | `generateEntryQr` |
 | `POST /:id/qr/validate` | `auth`, `[PROVIDER]` | `validateEntryQr` |
 | `POST /:id/qr/request-scan` | `auth`, `[PROVIDER]` | `requestEntranceScan` |
@@ -192,6 +194,23 @@ Before this fix, both `CASH` and `WALLET` credited the provider's wallet with th
 - **Backward compatibility**: a quote created before this fix has no `labour` on its items at all. `getQuoteLaborBreakdown` falls back to treating each such item's full `unitPrice` as labour (so `laborTotal` still equals the old `totalAmount`) — but `hasExplicitSplit` stays `false` in that case, which **skips the CASH debit step entirely**. This is deliberate: a legacy quote never had a real company/provider split computed, so nothing should be reclaimed from the provider for it — the net result is identical to the pre-fix behavior (full credit, no debit), not a differently-wrong number that happens to be zero.
 - `WALLET` needs no debit step at all, at any point — the company already collected the full amount from the customer's wallet directly, so crediting the provider only `laborTotal` (instead of the old full `totalAmount`) is enough on its own to leave the difference with the company.
 
+### 7.2 UPI QR on the provider's phone (added 2026-10-09)
+
+Radix's PaymentCollectionScreen used to show a JSON "wallet payment" QR that nothing could actually pay. It now shows a **Razorpay single-use, fixed-amount UPI QR** for the full quote total — any UPI app can pay it, the amount can't be edited, and the customer's Serwise wallet balance is **not** applied (wallet-funded payment is deferred to the serwise app, not built yet).
+
+- `POST /:id/payment-qr` (`getPaymentQr`) — assigned provider, `PAYMENT` stage, total > 0. Reuses the complaint's newest `PENDING` QR if it's for the same amount and has > 5 min left; otherwise closes any open ones and creates a new one (60-min `close_by`). Stored as a `PaymentOrder` with `purpose: 'complaint_settlement'`, `razorpayOrderId` = the QR id (`qr_xxx`), `meta: { complaintId, providerId, imageUrl, imageContent, closeBy }` — no schema change. Razorpay calls live in `razorpay-qr.service.ts` (kept separate so ComplaintService doesn't import PaymentService — that would be circular).
+- Payment lands via the **`qr_code.credited`** webhook (`PaymentService.handleQrCredited`): claims the order `PENDING→PROCESSING`, then `ComplaintService.settleViaUpiQr` (rejects underpayment / non-`PAYMENT` stage), then `CAPTURED`. It never rethrows: a retry can't succeed once the order is claimed, and repeated 5xx responses get the webhook disabled. Instead, anything it can't apply (including a payment on a QR already closed by a cash settlement) is marked `FAILED` and escalated via `TelegramService.notifyUnappliedQrPayment` for a manual refund.
+- Money: provider credited `laborTotal` only (company holds the money, like WALLET); customer gets an **audit-only** DEBIT (`paymentProvider: RAZORPAY`, `updateBalance: false`) via `WalletService.recordCustomerComplaintPayment`.
+- Radix also polls the complaint every 10s while showing the QR, so a missed socket event still flips it to success.
+
+### 7.3 Admin-recorded cash (added 2026-10-09)
+
+`POST /:id/record-cash` (`recordCashPayment`, ADMIN, optional `note`) is for a customer who paid the full total in cash **directly to the company** (e.g. at the office). It requires `PAYMENT` stage and a quote > 0. The customer gets an audit-only DEBIT (`paymentProvider: CASH`, `meta: { method: 'ADMIN_CASH', collectedBy: 'ADMIN', adminId, note }`), and the wallet is created if missing. The provider is credited `laborTotal` (`CASH`) with **no** cash-offset debit, since the provider never held the cash. ComplaintLog `STAGE_CHANGED` records the admin as actor. Watchtower: "Record Cash Payment" button in the ticket detail panel (`RecordCashPayment.tsx`), PAYMENT stage only.
+
+### 7.4 Shared settlement (`settlePayment`)
+
+`completePayment`, `recordCashPayment`, and `settleViaUpiQr` all go through the private `settlePayment` (methods `CASH | WALLET | UPI_QR | ADMIN_CASH`). It claims `PAYMENT → COMPLETED` with a guarded `updateMany` **inside** the Serializable transaction (409 if already settled), so a QR webhook, provider cash-collect, and admin cash can't double-settle. After commit it closes every other open QR for the complaint (awaited, best-effort) and emits `complaint:payment_received` to the provider and watchtower (previously radix listened for this event but nothing sent it). The provider's "Job Closed" notification now states `laborTotal` (it used to say the full total).
+
 ---
 
 ## 8. Entry QR (10-minute physical entry token)
@@ -310,6 +329,8 @@ src/tests/dbHelpers.ts                  — resetAllTestTables, extended for Quo
 ---
 
 ## 14. Change Log
+
+- **2026-10-09** — Payment collection: Razorpay fixed-amount UPI QR for radix (§7.2, `qr_code.credited` webhook), admin-recorded cash from watchtower (§7.3), shared `settlePayment` with an in-transaction stage claim (§7.4), `complaint:payment_received` now actually emitted. 7 new tests in `quote-and-payment.test.ts` (112 total in the complaint suite). **Ops:** enable the `qr_code.credited` event on the Razorpay webhook, and confirm QR Codes is activated on the live account. Known gap: if the customer pays the QR in the instant between a cash settlement committing and its QR close, the payment lands on Telegram for a manual refund. It is not auto-refunded.
 
 - **2026-10-08** — Force assignment (§5.2): `assignProvider` `force` flag (accepted on the provider's behalf, no popup/deferral); `rejectAssignment` now rejects (409) an already-accepted job. 2 new tests in `provider-assignment.test.ts` (105 total).
 

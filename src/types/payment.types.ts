@@ -96,11 +96,19 @@ export type RazorpayPaymentEntity = {
   contact:  string | null; // user's phone number — used to match PaymentSession
 };
 
+export type RazorpayQrCodeEntity = {
+  id:                       string;  // qr_xxx
+  status:                   string;
+  payments_amount_received: number;  // paise
+  notes:                    Record<string, string> | null;
+};
+
 export type RazorpayWebhookPayload = {
   entity:   string;
   event:    string;
   contains: string[];
   payload:  {
     payment?: { entity: RazorpayPaymentEntity };
+    qr_code?: { entity: RazorpayQrCodeEntity }; // qr_code.* events only
   };
 };
