@@ -1680,18 +1680,28 @@ export class ComplaintService {
 
   // ─── Complete Service (provider marks the repair itself done) ────────────
 
-  static async completeService(complaintId: string, providerId: string) {
+  // `asAdmin`: an admin marks the work done from watchtower on the assigned
+  // provider's behalf (e.g. the provider phoned it in) — skips the providerId
+  // ownership filter, same model as addQuote's asAdmin.
+  static async completeService(complaintId: string, requesterId: string, asAdmin = false) {
     const complaint = await prisma.complaint.findFirst({
-      where: { id: complaintId, providerId, isDeleted: false },
+      where: { id: complaintId, ...(asAdmin ? {} : { providerId: requesterId }), isDeleted: false },
     });
     if (!complaint) throw new ApiError(404, 'Complaint not found or not assigned to you');
     if (complaint.stage !== ComplaintStage.IN_PROGRESS) {
       throw new ApiError(400, 'Complaint is not in progress');
     }
 
-    const updated = await prisma.complaint.update({
-      where: { id: complaintId },
+    // Guarded write — the provider (radix) and an admin (watchtower) can now
+    // both press this; only one transition may happen.
+    const claimed = await prisma.complaint.updateMany({
+      where: { id: complaintId, stage: ComplaintStage.IN_PROGRESS, isDeleted: false },
       data:  { stage: ComplaintStage.PAYMENT },
+    });
+    if (claimed.count === 0) throw new ApiError(409, 'Work on this complaint was already marked complete');
+
+    const updated = await prisma.complaint.findUniqueOrThrow({
+      where:   { id: complaintId },
       include: COMPLAINT_INCLUDE,
     });
 
@@ -1700,8 +1710,8 @@ export class ComplaintService {
       event: 'STAGE_CHANGED',
       fromStage: ComplaintStage.IN_PROGRESS,
       toStage: ComplaintStage.PAYMENT,
-      actorId: providerId,
-      actorRole: Role.PROVIDER,
+      actorId: requesterId,
+      actorRole: asAdmin ? Role.ADMIN : Role.PROVIDER,
     });
 
     emit(() =>

@@ -454,10 +454,13 @@ router.patch(
  * @swagger
  * /complaint/{id}/complete-service:
  *   patch:
- *     summary: Mark the repair itself as finished (PROVIDER)
+ *     summary: Mark the repair itself as finished (PROVIDER, ADMIN)
  *     description: >
  *       Moves complaint from IN_PROGRESS → PAYMENT. Call this once the physical
  *       repair is done and the customer needs to pay to close the request.
+ *       ADMIN may call it on the assigned provider's behalf (watchtower's
+ *       "Mark Work Completed"); the provider must call it on their own job.
+ *       409 if it was already moved concurrently.
  *     tags: [Complaint]
  *     security:
  *       - bearerAuth: []
@@ -471,7 +474,7 @@ router.patch(
 router.patch(
   '/:id/complete-service',
   auth,
-  authorize([Role.PROVIDER]),
+  authorize([Role.PROVIDER, Role.ADMIN]),
   ComplaintController.completeService,
 );
 

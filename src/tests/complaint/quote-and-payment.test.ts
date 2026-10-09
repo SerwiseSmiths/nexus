@@ -370,6 +370,41 @@ describe('Quote flow', () => {
       expect(res.status).toBe(404);
     });
 
+    it('an ADMIN can mark the work done on the provider\'s behalf (watchtower), logged as ADMIN', async () => {
+      const customer = await createUser(Role.CUSTOMER);
+      const provider = await createUser(Role.PROVIDER);
+      const admin = await createUser(Role.ADMIN);
+      const address = await createAddressFor(customer.id);
+      const complaint = await createComplaintFor(customer.id, address.id, {
+        providerId: provider.id, stage: 'IN_PROGRESS', totalAmount: 500,
+      });
+
+      const res = await testRequest(app)
+        .patch(`/api/complaint/${complaint.id}/complete-service`)
+        .set('Authorization', `Bearer ${signAccessToken(admin)}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.complaint.stage).toBe('PAYMENT');
+      const log = await prisma.complaintLog.findFirst({ where: { complaintId: complaint.id, toStage: 'PAYMENT' } });
+      expect(log).toMatchObject({ actorId: admin.id, actorRole: 'ADMIN' });
+    });
+
+    it('rejects an ADMIN outside IN_PROGRESS with 400', async () => {
+      const customer = await createUser(Role.CUSTOMER);
+      const provider = await createUser(Role.PROVIDER);
+      const admin = await createUser(Role.ADMIN);
+      const address = await createAddressFor(customer.id);
+      const complaint = await createComplaintFor(customer.id, address.id, {
+        providerId: provider.id, stage: 'PAYMENT', totalAmount: 500,
+      });
+
+      const res = await testRequest(app)
+        .patch(`/api/complaint/${complaint.id}/complete-service`)
+        .set('Authorization', `Bearer ${signAccessToken(admin)}`);
+
+      expect(res.status).toBe(400);
+    });
+
     it('rejects a CUSTOMER caller with 403 (role gate)', async () => {
       const customer = await createUser(Role.CUSTOMER);
       const provider = await createUser(Role.PROVIDER);

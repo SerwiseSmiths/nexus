@@ -248,7 +248,11 @@ export class ComplaintController {
 
   static async completeService(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const complaint = await ComplaintService.completeService(req.params.id as string, req.user!.id);
+      const complaint = await ComplaintService.completeService(
+        req.params.id as string,
+        req.user!.id,
+        req.user!.role === Role.ADMIN,
+      );
       return ApiResponse.success(res, 200, 'Repair marked as completed', { complaint });
     } catch (error) {
       next(error);

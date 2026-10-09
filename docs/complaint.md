@@ -330,6 +330,8 @@ src/tests/dbHelpers.ts                  — resetAllTestTables, extended for Quo
 
 ## 14. Change Log
 
+- **2026-10-09** — `PATCH /:id/complete-service` now also accepts ADMIN (on the assigned provider's behalf, ownership filter skipped, logged `actorRole: ADMIN`). The write is now a guarded `updateMany` on `stage: IN_PROGRESS` (409 if provider and admin race). Watchtower: "Mark Work Completed" button (`MarkWorkCompleted.tsx`), IN_PROGRESS tickets only. 2 new tests (114 total in the complaint suite).
+
 - **2026-10-09** — Payment collection: Razorpay fixed-amount UPI QR for radix (§7.2, `qr_code.credited` webhook), admin-recorded cash from watchtower (§7.3), shared `settlePayment` with an in-transaction stage claim (§7.4), `complaint:payment_received` now actually emitted. 7 new tests in `quote-and-payment.test.ts` (112 total in the complaint suite). **Ops:** enable the `qr_code.credited` event on the Razorpay webhook, and confirm QR Codes is activated on the live account. Known gap: if the customer pays the QR in the instant between a cash settlement committing and its QR close, the payment lands on Telegram for a manual refund. It is not auto-refunded.
 
 - **2026-10-08** — Force assignment (§5.2): `assignProvider` `force` flag (accepted on the provider's behalf, no popup/deferral); `rejectAssignment` now rejects (409) an already-accepted job. 2 new tests in `provider-assignment.test.ts` (105 total).
