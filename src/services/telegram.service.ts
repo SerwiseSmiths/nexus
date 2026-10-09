@@ -246,4 +246,28 @@ export class TelegramService {
 
     await TelegramService.send(html);
   }
+
+  // A customer paid a complaint's UPI QR but nexus couldn't apply it (most
+  // likely the job was already settled another way, e.g. cash recorded by an
+  // admin) — the money is with Razorpay and needs a manual refund/reconcile.
+  static async notifyUnappliedQrPayment(params: {
+    complaintId: string;
+    qrId: string;
+    razorpayPaymentId: string;
+    amountRupees: number;
+    reason: string;
+  }): Promise<void> {
+    const html =
+      `🚨 <b>UPI QR Payment Needs Review</b>\n` +
+      `${'─'.repeat(28)}\n` +
+      line('🆔', 'Complaint ID', params.complaintId) +
+      line('💵', 'Amount Paid', `₹${params.amountRupees}`) +
+      line('🔑', 'Razorpay ID', params.razorpayPaymentId) +
+      line('🔳', 'QR ID', params.qrId) +
+      line('⚠️', 'Reason', params.reason) +
+      line('📅', 'Received', fmt(new Date())) +
+      `\nPayment was captured but not applied to the complaint — refund or reconcile manually in the Razorpay dashboard.\n`;
+
+    await TelegramService.send(html);
+  }
 }

@@ -1,4 +1,5 @@
-import { ComplaintStage, NotificationType, PaymentProvider, Prisma, QuoteStatus, Role, WorkHistoryEvent } from '@prisma/client';
+import { ComplaintStage, NotificationType, PaymentOrderStatus, PaymentProvider, Prisma, QuoteStatus, Role, WorkHistoryEvent } from '@prisma/client';
+import type { Complaint, Quote } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import jwt from 'jsonwebtoken';
 import { config } from '@/configs';
@@ -11,6 +12,7 @@ import { NotificationService } from '@/services/notification.service';
 import { TelegramService } from '@/services/telegram.service';
 import { WhatsAppService } from '@/services/whatsapp.service';
 import { WalletService } from '@/services/wallet.service';
+import { RazorpayQrService } from '@/services/razorpay-qr.service';
 import { StrapiService } from '@/services/strapi.service';
 import { DeviceTypeGroupService } from '@/services/device-type-group.service';
 import { DEVICE_KEY_TO_TYPE, DEVICE_META_VALIDATORS, type DeviceKey } from '@/types/device.types';
@@ -24,6 +26,9 @@ import type {
   ValidateQrInput,
   ReopenComplaintInput,
   CompletePaymentInput,
+  RecordCashPaymentInput,
+  SettleViaUpiQrInput,
+  ComplaintPaymentQr,
   RequestedDevice,
 } from '@/types/complaint.types';
 
@@ -285,6 +290,30 @@ function getQuoteLaborBreakdown(items: unknown): { laborTotal: number; hasExplic
   }
   return { laborTotal, hasExplicitSplit };
 }
+
+// How a complaint in PAYMENT got paid — drives which wallets move (see
+// ComplaintService.settlePayment):
+//   CASH       — provider collected cash on-site (provider owes company the non-labour part)
+//   WALLET     — debited from the customer's Serwise wallet (not offered by radix yet)
+//   UPI_QR     — customer paid the provider's on-screen Razorpay QR (company holds the money)
+//   ADMIN_CASH — customer paid cash to the company directly, recorded by an admin in watchtower
+type SettlementMethod = 'CASH' | 'WALLET' | 'UPI_QR' | 'ADMIN_CASH';
+
+// PaymentOrder.purpose for a complaint's payment QR. PaymentOrder.razorpayOrderId
+// holds the Razorpay QR id (qr_xxx) for these rows.
+export const COMPLAINT_QR_PURPOSE = 'complaint_settlement';
+const PAYMENT_QR_TTL_MINUTES = 60;
+// Don't hand the provider a QR that'll expire while the customer is still
+// opening their UPI app — mint a fresh one instead.
+const PAYMENT_QR_MIN_REMAINING_MS = 5 * 60 * 1000;
+
+type PaymentQrMeta = {
+  complaintId:  string;
+  providerId:   string;
+  imageUrl:     string;
+  imageContent: string | null;
+  closeBy:      number;
+};
 
 // ---------------------------------------------------------------------------
 // ComplaintService
@@ -1651,18 +1680,28 @@ export class ComplaintService {
 
   // ─── Complete Service (provider marks the repair itself done) ────────────
 
-  static async completeService(complaintId: string, providerId: string) {
+  // `asAdmin`: an admin marks the work done from watchtower on the assigned
+  // provider's behalf (e.g. the provider phoned it in) — skips the providerId
+  // ownership filter, same model as addQuote's asAdmin.
+  static async completeService(complaintId: string, requesterId: string, asAdmin = false) {
     const complaint = await prisma.complaint.findFirst({
-      where: { id: complaintId, providerId, isDeleted: false },
+      where: { id: complaintId, ...(asAdmin ? {} : { providerId: requesterId }), isDeleted: false },
     });
     if (!complaint) throw new ApiError(404, 'Complaint not found or not assigned to you');
     if (complaint.stage !== ComplaintStage.IN_PROGRESS) {
       throw new ApiError(400, 'Complaint is not in progress');
     }
 
-    const updated = await prisma.complaint.update({
-      where: { id: complaintId },
+    // Guarded write — the provider (radix) and an admin (watchtower) can now
+    // both press this; only one transition may happen.
+    const claimed = await prisma.complaint.updateMany({
+      where: { id: complaintId, stage: ComplaintStage.IN_PROGRESS, isDeleted: false },
       data:  { stage: ComplaintStage.PAYMENT },
+    });
+    if (claimed.count === 0) throw new ApiError(409, 'Work on this complaint was already marked complete');
+
+    const updated = await prisma.complaint.findUniqueOrThrow({
+      where:   { id: complaintId },
       include: COMPLAINT_INCLUDE,
     });
 
@@ -1671,8 +1710,8 @@ export class ComplaintService {
       event: 'STAGE_CHANGED',
       fromStage: ComplaintStage.IN_PROGRESS,
       toStage: ComplaintStage.PAYMENT,
-      actorId: providerId,
-      actorRole: Role.PROVIDER,
+      actorId: requesterId,
+      actorRole: asAdmin ? Role.ADMIN : Role.PROVIDER,
     });
 
     emit(() =>
@@ -1726,12 +1765,220 @@ export class ComplaintService {
       throw new ApiError(400, 'Complaint is not in PAYMENT stage');
     }
 
+    return ComplaintService.settlePayment({
+      complaint,
+      method,
+      actorId:   providerId,
+      actorRole: Role.PROVIDER,
+    });
+  }
+
+  // ─── Admin: record cash paid directly to the company ──────────────────────
+  // e.g. the customer walked into the office and paid the full quote in cash.
+  // Same end state as any other settlement (complaint COMPLETED, provider
+  // credited their labour), but the company — not the provider — holds the
+  // cash, so there's no provider-side cash offset debit.
+
+  static async recordCashPayment({ complaintId, adminId, note }: RecordCashPaymentInput) {
+    const complaint = await prisma.complaint.findFirst({
+      where: { id: complaintId, isDeleted: false },
+      include: { quote: true },
+    });
+    if (!complaint) throw new ApiError(404, 'Complaint not found');
+    if (complaint.stage !== ComplaintStage.PAYMENT) {
+      throw new ApiError(400, 'Cash can only be recorded once the job is awaiting payment');
+    }
+    if (!complaint.quote || complaint.quote.totalAmount <= 0) {
+      throw new ApiError(400, 'This complaint has no payable quote');
+    }
+
+    return ComplaintService.settlePayment({
+      complaint,
+      method:             'ADMIN_CASH',
+      actorId:            adminId,
+      actorRole:          Role.ADMIN,
+      customerLedgerMeta: { collectedBy: 'ADMIN', adminId, ...(note && { note }) },
+      logMetadata:        { ...(note && { note }) },
+    });
+  }
+
+  // ─── Provider: fixed-amount UPI QR for the quote total ────────────────────
+  // The customer must pay the full amount here — their Serwise wallet balance
+  // can't be applied from radix (wallet payments will go through the serwise
+  // app). Reuses the complaint's still-open QR when it's for the same amount
+  // and not about to expire, so re-opening the screen doesn't mint new QRs.
+
+  static async getPaymentQr(complaintId: string, providerId: string): Promise<ComplaintPaymentQr> {
+    const complaint = await prisma.complaint.findFirst({
+      where: { id: complaintId, providerId, isDeleted: false },
+      include: { quote: true },
+    });
+    if (!complaint) throw new ApiError(404, 'Complaint not found or not assigned to you');
+    if (complaint.stage !== ComplaintStage.PAYMENT) {
+      throw new ApiError(400, 'Complaint is not in PAYMENT stage');
+    }
+    const totalAmount = complaint.quote?.totalAmount ?? 0;
+    if (totalAmount <= 0) throw new ApiError(400, 'This complaint has no payable quote');
+
+    const amountPaise = Math.round(totalAmount * 100);
+
+    const existing = await prisma.paymentOrder.findFirst({
+      where: {
+        purpose:   COMPLAINT_QR_PURPOSE,
+        status:    PaymentOrderStatus.PENDING,
+        isDeleted: false,
+        meta:      { path: ['complaintId'], equals: complaintId },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (existing) {
+      const meta = existing.meta as PaymentQrMeta;
+      if (existing.amount === amountPaise && meta.closeBy * 1000 - Date.now() > PAYMENT_QR_MIN_REMAINING_MS) {
+        // QRs created before the UPI string was decoded server-side — decode
+        // now so radix shows a plain QR instead of Razorpay's poster image.
+        if (!meta.imageContent) {
+          const imageContent = await RazorpayQrService.decodeUpiString(meta.imageUrl);
+          if (imageContent) {
+            meta.imageContent = imageContent;
+            await prisma.paymentOrder.update({ where: { id: existing.id }, data: { meta } });
+          }
+        }
+        return ComplaintService.toPaymentQr(existing.razorpayOrderId, totalAmount, meta);
+      }
+    }
+
+    // Anything still open for this complaint is stale (near expiry) — close
+    // it so the customer can't pay an old QR after we hand out a new one.
+    await ComplaintService.closeOutstandingPaymentQrs(complaintId);
+
+    const qr = await RazorpayQrService.createFixedAmountQr({
+      amountPaise,
+      description: `Serwise service #${complaintId.slice(-5).toUpperCase()}`,
+      closeBy:     Math.floor(Date.now() / 1000) + PAYMENT_QR_TTL_MINUTES * 60,
+      notes:       { complaintId, purpose: COMPLAINT_QR_PURPOSE },
+    });
+
+    const meta: PaymentQrMeta = {
+      complaintId,
+      providerId,
+      imageUrl:     qr.imageUrl,
+      imageContent: qr.imageContent,
+      closeBy:      qr.closeBy,
+    };
+    await prisma.paymentOrder.create({
+      data: {
+        userId:          complaint.userId,
+        razorpayOrderId: qr.id,
+        amount:          amountPaise,
+        purpose:         COMPLAINT_QR_PURPOSE,
+        meta,
+        status:          PaymentOrderStatus.PENDING,
+      },
+    });
+
+    logger.info('[Complaint] Payment QR created', { complaintId, qrId: qr.id, amountPaise });
+    return ComplaintService.toPaymentQr(qr.id, totalAmount, meta);
+  }
+
+  private static toPaymentQr(qrId: string, amount: number, meta: PaymentQrMeta): ComplaintPaymentQr {
+    return {
+      qrId,
+      amount,
+      imageUrl:     meta.imageUrl,
+      imageContent: meta.imageContent,
+      expiresAt:    new Date(meta.closeBy * 1000).toISOString(),
+    };
+  }
+
+  // Closes every still-open payment QR for a complaint (optionally sparing the
+  // one that was just paid) — called whenever the complaint gets settled, so a
+  // customer can't also pay a leftover QR after paying cash. Never throws:
+  // closing is a safety net, not part of the settlement itself.
+  private static async closeOutstandingPaymentQrs(complaintId: string, exceptQrId?: string): Promise<void> {
+    try {
+      const open = await prisma.paymentOrder.findMany({
+        where: {
+          purpose:   COMPLAINT_QR_PURPOSE,
+          status:    PaymentOrderStatus.PENDING,
+          isDeleted: false,
+          meta:      { path: ['complaintId'], equals: complaintId },
+          ...(exceptQrId && { razorpayOrderId: { not: exceptQrId } }),
+        },
+      });
+      for (const order of open) {
+        // Claim first so a webhook landing at the same moment can't also
+        // process this QR (it only claims PENDING rows).
+        const claimed = await prisma.paymentOrder.updateMany({
+          where: { id: order.id, status: PaymentOrderStatus.PENDING },
+          data:  { status: PaymentOrderStatus.FAILED },
+        });
+        if (claimed.count > 0) await RazorpayQrService.closeQr(order.razorpayOrderId);
+      }
+    } catch (error) {
+      logger.error('[Complaint] Failed to close outstanding payment QRs', { error, complaintId });
+    }
+  }
+
+  // ─── Webhook: customer paid the provider's UPI QR ─────────────────────────
+
+  static async settleViaUpiQr({ complaintId, qrId, razorpayPaymentId, amountPaidPaise }: SettleViaUpiQrInput) {
+    const complaint = await prisma.complaint.findFirst({
+      where: { id: complaintId, isDeleted: false },
+      include: { quote: true },
+    });
+    if (!complaint) throw new ApiError(404, 'Complaint not found');
+    if (complaint.stage !== ComplaintStage.PAYMENT) {
+      throw new ApiError(409, `Complaint is ${complaint.stage}, no longer awaiting payment`);
+    }
+    const expectedPaise = Math.round((complaint.quote?.totalAmount ?? 0) * 100);
+    if (amountPaidPaise < expectedPaise) {
+      throw new ApiError(400, `Paid ₹${amountPaidPaise / 100}, expected ₹${expectedPaise / 100}`);
+    }
+
+    return ComplaintService.settlePayment({
+      complaint,
+      method:             'UPI_QR',
+      actorId:            null,
+      actorRole:          null,
+      customerLedgerMeta: { razorpayPaymentId, qrId },
+      logMetadata:        { razorpayPaymentId, qrId },
+      exceptQrId:         qrId,
+    });
+  }
+
+  // ─── Shared settlement: PAYMENT → COMPLETED + all wallet movements ────────
+
+  private static async settlePayment(params: {
+    complaint:           Complaint & { quote: Quote | null };
+    method:              SettlementMethod;
+    actorId:             string | null;
+    actorRole:           Role | null;
+    customerLedgerMeta?: Record<string, unknown>;
+    logMetadata?:        Record<string, unknown>;
+    exceptQrId?:         string;
+  }) {
+    const { complaint, method, actorId, actorRole } = params;
+    const complaintId = complaint.id;
+    const providerId  = complaint.providerId;
+    if (!providerId) throw new ApiError(400, 'Complaint has no assigned provider');
+
     const totalAmount = complaint.quote?.totalAmount ?? 0;
     const { laborTotal, hasExplicitSplit } = getQuoteLaborBreakdown(complaint.quote?.items);
-    const paymentProvider = method === 'CASH' ? PaymentProvider.CASH : PaymentProvider.RAZORPAY;
+    const paymentProvider =
+      method === 'CASH' || method === 'ADMIN_CASH' ? PaymentProvider.CASH : PaymentProvider.RAZORPAY;
 
     const updated = await prisma.$transaction(
       async (tx) => {
+        // Claim the PAYMENT → COMPLETED transition atomically. The caller's
+        // stage check ran outside this transaction, and a job can now be
+        // settled from three places at once (provider app, QR webhook,
+        // watchtower) — only one of them may win.
+        const claimed = await tx.complaint.updateMany({
+          where: { id: complaintId, stage: ComplaintStage.PAYMENT, isDeleted: false },
+          data:  { stage: ComplaintStage.COMPLETED },
+        });
+        if (claimed.count === 0) throw new ApiError(409, 'This complaint has already been paid');
+
         // For WALLET payments, actually charge the customer before crediting
         // the provider or closing the complaint — previously `method: 'WALLET'`
         // completed the job and paid the provider with no verification the
@@ -1742,9 +1989,21 @@ export class ComplaintService {
           await WalletService.debitCustomerForComplaintPayment(complaint.userId, totalAmount, complaintId, tx);
         }
 
-        const updatedComplaint = await tx.complaint.update({
-          where: { id: complaintId },
-          data:  { stage: ComplaintStage.COMPLETED },
+        // Paid outside the wallet (UPI QR / cash at the office) — audit-only
+        // entry so the customer's ledger still shows the payment.
+        if ((method === 'UPI_QR' || method === 'ADMIN_CASH') && totalAmount > 0) {
+          await WalletService.recordCustomerComplaintPayment(
+            complaint.userId,
+            totalAmount,
+            complaintId,
+            paymentProvider,
+            { method, ...params.customerLedgerMeta },
+            tx,
+          );
+        }
+
+        const updatedComplaint = await tx.complaint.findUniqueOrThrow({
+          where:   { id: complaintId },
           include: COMPLAINT_INCLUDE,
         });
 
@@ -1758,8 +2017,8 @@ export class ComplaintService {
 
         // CASH only, and only when the quote actually has a real labour
         // split (hasExplicitSplit) — the provider collected the *full*
-        // amount directly from the customer on-site (unlike WALLET, where
-        // the company already holds 100% of it via the debit above), so the
+        // amount directly from the customer on-site (unlike WALLET / UPI_QR /
+        // ADMIN_CASH, where the company already holds 100% of it), so the
         // full amount is debited back out; net effect is credit(labour) +
         // debit(total) = -(total - labour), i.e. "provider keeps labour,
         // owes the rest to the company." A legacy quote with no stored
@@ -1787,10 +2046,14 @@ export class ComplaintService {
       event: 'STAGE_CHANGED',
       fromStage: ComplaintStage.PAYMENT,
       toStage: ComplaintStage.COMPLETED,
-      actorId: providerId,
-      actorRole: Role.PROVIDER,
-      metadata: { method, totalAmount, laborTotal },
+      actorId,
+      actorRole,
+      metadata: { method, totalAmount, laborTotal, ...params.logMetadata } as Prisma.InputJsonValue,
     });
+
+    // Awaited (not emit()) — on Vercel a background promise may never run,
+    // and a leftover open QR is a double-payment risk.
+    await ComplaintService.closeOutstandingPaymentQrs(complaintId, params.exceptQrId);
 
     emit(() =>
       RealtimeService.emitStageChanged(
@@ -1799,6 +2062,7 @@ export class ComplaintService {
         ComplaintStage.COMPLETED,
       ),
     );
+    emit(() => RealtimeService.emitPaymentReceived(updated as unknown as Record<string, unknown>, method));
     emit(() =>
       NotificationService.sendToUser({
         userId:      complaint.userId,
@@ -1812,7 +2076,7 @@ export class ComplaintService {
       NotificationService.sendToUser({
         userId:      providerId,
         title:       'Job Closed',
-        body:        `₹${totalAmount} has been deposited to your wallet.`,
+        body:        `₹${laborTotal} has been deposited to your wallet.`,
         type:        NotificationType.PAYMENT,
         complaintId,
       }),

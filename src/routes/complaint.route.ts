@@ -454,10 +454,13 @@ router.patch(
  * @swagger
  * /complaint/{id}/complete-service:
  *   patch:
- *     summary: Mark the repair itself as finished (PROVIDER)
+ *     summary: Mark the repair itself as finished (PROVIDER, ADMIN)
  *     description: >
  *       Moves complaint from IN_PROGRESS → PAYMENT. Call this once the physical
  *       repair is done and the customer needs to pay to close the request.
+ *       ADMIN may call it on the assigned provider's behalf (watchtower's
+ *       "Mark Work Completed"); the provider must call it on their own job.
+ *       409 if it was already moved concurrently.
  *     tags: [Complaint]
  *     security:
  *       - bearerAuth: []
@@ -471,7 +474,7 @@ router.patch(
 router.patch(
   '/:id/complete-service',
   auth,
-  authorize([Role.PROVIDER]),
+  authorize([Role.PROVIDER, Role.ADMIN]),
   ComplaintController.completeService,
 );
 
@@ -509,6 +512,73 @@ router.patch(
   auth,
   authorize([Role.PROVIDER]),
   ComplaintController.completePayment,
+);
+
+/**
+ * @swagger
+ * /complaint/{id}/payment-qr:
+ *   post:
+ *     summary: Get a fixed-amount UPI QR for the quote total (PROVIDER)
+ *     description: >
+ *       Returns a single-use Razorpay UPI QR locked to the complaint's quote
+ *       total — the customer pays the full amount from any UPI app (wallet
+ *       balance can't be applied here). Reuses the complaint's open QR if it
+ *       has more than 5 minutes left, otherwise creates a new one (60-min
+ *       expiry). When paid, Razorpay's `qr_code.credited` webhook closes the
+ *       complaint and emits `complaint:payment_received` to the provider.
+ *     tags: [Complaint]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+ *     responses:
+ *       200: { description: "QR ready — { qr: { qrId, amount, imageUrl, imageContent, expiresAt } }" }
+ *       400: { description: Complaint not in PAYMENT stage, or no payable quote }
+ *       404: { description: Not found or not assigned to this provider }
+ *       502: { description: Razorpay rejected the QR request }
+ *       503: { description: Razorpay not configured }
+ */
+router.post(
+  '/:id/payment-qr',
+  auth,
+  authorize([Role.PROVIDER]),
+  ComplaintController.getPaymentQr,
+);
+
+/**
+ * @swagger
+ * /complaint/{id}/record-cash:
+ *   post:
+ *     summary: Record that the customer paid the full quote in cash to the company (ADMIN)
+ *     description: >
+ *       For a customer who paid at the office rather than to the provider.
+ *       Moves PAYMENT → COMPLETED, writes an audit-only CASH debit on the
+ *       customer's ledger (wallet balance untouched), credits the provider
+ *       their labour only (no cash-offset debit — the company holds the
+ *       cash), closes any open payment QR, and logs the admin in ComplaintLog.
+ *     tags: [Complaint]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               note: { type: string, maxLength: 500 }
+ *     responses:
+ *       200: { description: Cash recorded, complaint closed }
+ *       400: { description: Complaint not in PAYMENT stage, or no payable quote }
+ *       404: { description: Complaint not found }
+ *       409: { description: Already paid (settled concurrently) }
+ */
+router.post(
+  '/:id/record-cash',
+  auth,
+  authorize([Role.ADMIN]),
+  ComplaintController.recordCashPayment,
 );
 
 // ─── QR Entry ─────────────────────────────────────────────────────────────────

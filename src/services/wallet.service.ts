@@ -256,6 +256,46 @@ export class WalletService {
     });
   }
 
+  // Audit-only DEBIT on the customer's ledger for a complaint paid outside
+  // the wallet — UPI QR on the provider's phone, or cash handed to an admin
+  // at the office. wallet.balance is never touched (updateBalance: false);
+  // this exists so the customer's ledger still shows what they paid for the
+  // job and how. Creates the wallet if the customer never had one — unlike
+  // debitCustomerForComplaintPayment, no balance is needed. Requires the
+  // caller's transaction so the entry commits with the complaint closing.
+  static async recordCustomerComplaintPayment(
+    userId: string,
+    amount: number,
+    complaintId: string,
+    paymentProvider: PaymentProvider,
+    meta: Record<string, unknown>,
+    tx: TxClient,
+  ) {
+    if (amount <= 0) return;
+
+    const wallet = await tx.wallet.upsert({
+      where:  { userId },
+      create: { userId, walletType: WalletType.CUSTOMER },
+      update: {},
+    });
+
+    await tx.walletLedger.create({
+      data: {
+        walletId:       wallet.id,
+        userId,
+        type:           WalletLedgerType.DEBIT,
+        source:         WalletLedgerSource.ORDER_PAYMENT,
+        amount,
+        openingBalance: wallet.balance,
+        closingBalance: wallet.balance,
+        updateBalance:  false,
+        refId:          complaintId,
+        paymentProvider,
+        meta:           meta as Prisma.InputJsonValue,
+      },
+    });
+  }
+
   private static displayName(user: { firstName: string | null; lastName: string | null; phoneNo: string }): string {
     return [user.firstName, user.lastName].filter(Boolean).join(' ') || user.phoneNo;
   }

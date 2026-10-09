@@ -95,6 +95,12 @@ export const CompletePaymentSchema = z.object({
   method: z.enum(['CASH', 'WALLET'], 'Please choose a payment method: CASH or WALLET'),
 });
 
+// Admin records that the customer paid the full quote in cash directly to
+// the company (e.g. at the office), not to the provider on-site.
+export const RecordCashPaymentSchema = z.object({
+  note: z.string().trim().max(500, 'Note must be 500 characters or fewer').optional(),
+});
+
 // ---------------------------------------------------------------------------
 // Inferred types
 // ---------------------------------------------------------------------------
@@ -110,6 +116,7 @@ export type LinkDeviceDto         = z.infer<typeof LinkDeviceSchema>;
 export type ValidateQrDto         = z.infer<typeof ValidateQrSchema>;
 export type ReopenComplaintDto    = z.infer<typeof ReopenComplaintSchema>;
 export type CompletePaymentDto    = z.infer<typeof CompletePaymentSchema>;
+export type RecordCashPaymentDto  = z.infer<typeof RecordCashPaymentSchema>;
 
 // ---------------------------------------------------------------------------
 // Request body interfaces (what controllers receive from req.body)
@@ -124,6 +131,7 @@ export interface LinkDeviceBody      extends LinkDeviceDto {}
 export interface ValidateQrBody      extends ValidateQrDto {}
 export interface ReopenComplaintBody    extends ReopenComplaintDto {}
 export interface CompletePaymentBody   extends CompletePaymentDto {}
+export interface RecordCashPaymentBody extends RecordCashPaymentDto {}
 
 // ---------------------------------------------------------------------------
 // Service input interfaces (controller → service)
@@ -198,4 +206,26 @@ export interface ReopenComplaintInput {
 export interface CompletePaymentInput extends CompletePaymentDto {
   complaintId: string;
   providerId:  string;
+}
+
+export interface RecordCashPaymentInput extends RecordCashPaymentDto {
+  complaintId: string;
+  adminId:     string;
+}
+
+// Called from the Razorpay `qr_code.credited` webhook once the customer has
+// actually paid the provider's on-screen QR.
+export interface SettleViaUpiQrInput {
+  complaintId:       string;
+  qrId:              string;
+  razorpayPaymentId: string;
+  amountPaidPaise:   number;
+}
+
+export interface ComplaintPaymentQr {
+  qrId:         string;
+  amount:       number;        // rupees — always the quote total
+  imageUrl:     string;
+  imageContent: string | null; // raw UPI string if Razorpay returned one
+  expiresAt:    string;        // ISO
 }

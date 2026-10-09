@@ -355,6 +355,20 @@ export class RealtimeService {
     ]);
   }
 
+  // A complaint's payment was settled — drives radix's PaymentCollectionScreen
+  // from "showing the QR" to its success state. Sent for every method (UPI
+  // QR via webhook, admin-recorded cash, provider cash/wallet) since the
+  // provider may still be on that screen when someone else settles it.
+  static async emitPaymentReceived(complaint: BroadcastPayload, method: string): Promise<void> {
+    const payload = { complaint, method };
+    await Promise.allSettled([
+      complaint.providerId
+        ? this.deliverToProvider(complaint.providerId as string, 'complaint:payment_received', payload)
+        : Promise.resolve(),
+      this.emitToAdmin('complaint:payment_received', payload),
+    ]);
+  }
+
   // Deliberately not mirrored to watchtower — the payload carries the
   // customer's entry-QR token, and there's no admin-side state to refresh.
   static async emitQrScanRequested(

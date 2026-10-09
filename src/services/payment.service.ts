@@ -8,7 +8,7 @@ import prisma from '@/services/prisma.service';
 import { SubscriptionService } from '@/services/subscription.service';
 import { WalletService } from '@/services/wallet.service';
 import { RealtimeService } from '@/services/realtime.service';
-import { ComplaintService } from '@/services/complaint.service';
+import { ComplaintService, COMPLAINT_QR_PURPOSE } from '@/services/complaint.service';
 import { NotificationService } from '@/services/notification.service';
 import { TelegramService } from '@/services/telegram.service';
 import type {
@@ -239,6 +239,12 @@ export class PaymentService {
 
     logger.info('[Webhook] Received Razorpay event', { event: event.event });
 
+    // Customer paid a complaint's fixed-amount UPI QR shown in radix.
+    if (event.event === 'qr_code.credited') {
+      await PaymentService.handleQrCredited(event);
+      return;
+    }
+
     // Handle both authorized (manual capture) and auto-captured payments
     if (event.event === 'payment.captured' || event.event === 'payment.authorized') {
       const payment = event.payload.payment?.entity;
@@ -345,6 +351,81 @@ export class PaymentService {
         logger.error('[Webhook] Session fulfillment failed', { error: err, sessionId: session.id });
         throw err;
       }
+    }
+  }
+
+  // ─── Webhook: complaint UPI QR paid ───────────────────────────────────────
+  // PaymentOrder.razorpayOrderId holds the QR id for these (see
+  // ComplaintService.getPaymentQr). Never rethrows: the order is claimed
+  // before settling, so a Razorpay retry could never succeed anyway — and
+  // repeated 5xx responses make Razorpay disable the whole webhook. A
+  // payment that can't be applied is escalated on Telegram instead.
+
+  private static async handleQrCredited(event: RazorpayWebhookPayload): Promise<void> {
+    const qr      = event.payload.qr_code?.entity;
+    const payment = event.payload.payment?.entity;
+    if (!qr || !payment) {
+      logger.warn('[Webhook] qr_code.credited without qr_code/payment entity');
+      return;
+    }
+
+    const claimed = await prisma.paymentOrder.updateMany({
+      where: {
+        razorpayOrderId: qr.id,
+        purpose:         COMPLAINT_QR_PURPOSE,
+        status:          PaymentOrderStatus.PENDING,
+        isDeleted:       false,
+      },
+      data: { status: PaymentOrderStatus.PROCESSING },
+    });
+
+    const order = await prisma.paymentOrder.findFirst({ where: { razorpayOrderId: qr.id, isDeleted: false } });
+    const complaintId = (order?.meta as { complaintId?: string } | null)?.complaintId ?? qr.notes?.complaintId ?? '';
+
+    if (claimed.count === 0) {
+      // Not PENDING: already processed (duplicate delivery — fine), or closed
+      // by a cash settlement a moment before the customer paid (needs refund).
+      if (order?.status === PaymentOrderStatus.FAILED) {
+        logger.error('[Webhook] Payment received on a closed complaint QR', { qrId: qr.id, complaintId });
+        await TelegramService.notifyUnappliedQrPayment({
+          complaintId,
+          qrId:              qr.id,
+          razorpayPaymentId: payment.id,
+          amountRupees:      payment.amount / 100,
+          reason:            'QR was already closed — the complaint was settled another way',
+        });
+      } else {
+        logger.info('[Webhook] QR order already claimed or unknown, skipping', { qrId: qr.id });
+      }
+      return;
+    }
+
+    try {
+      await ComplaintService.settleViaUpiQr({
+        complaintId,
+        qrId:              qr.id,
+        razorpayPaymentId: payment.id,
+        amountPaidPaise:   payment.amount,
+      });
+      await prisma.paymentOrder.update({
+        where: { razorpayOrderId: qr.id },
+        data:  { status: PaymentOrderStatus.CAPTURED, razorpayPaymentId: payment.id },
+      });
+      logger.info('[Webhook] Complaint settled via UPI QR', { complaintId, qrId: qr.id, razorpayPaymentId: payment.id });
+    } catch (err) {
+      await prisma.paymentOrder.update({
+        where: { razorpayOrderId: qr.id },
+        data:  { status: PaymentOrderStatus.FAILED, razorpayPaymentId: payment.id },
+      });
+      const reason = err instanceof Error ? err.message : 'Unknown error';
+      logger.error('[Webhook] Failed to settle complaint via UPI QR', { error: err, complaintId, qrId: qr.id });
+      await TelegramService.notifyUnappliedQrPayment({
+        complaintId,
+        qrId:              qr.id,
+        razorpayPaymentId: payment.id,
+        amountRupees:      payment.amount / 100,
+        reason,
+      });
     }
   }
 
