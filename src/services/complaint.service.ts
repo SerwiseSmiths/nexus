@@ -1834,6 +1834,15 @@ export class ComplaintService {
     if (existing) {
       const meta = existing.meta as PaymentQrMeta;
       if (existing.amount === amountPaise && meta.closeBy * 1000 - Date.now() > PAYMENT_QR_MIN_REMAINING_MS) {
+        // QRs created before the UPI string was decoded server-side — decode
+        // now so radix shows a plain QR instead of Razorpay's poster image.
+        if (!meta.imageContent) {
+          const imageContent = await RazorpayQrService.decodeUpiString(meta.imageUrl);
+          if (imageContent) {
+            meta.imageContent = imageContent;
+            await prisma.paymentOrder.update({ where: { id: existing.id }, data: { meta } });
+          }
+        }
         return ComplaintService.toPaymentQr(existing.razorpayOrderId, totalAmount, meta);
       }
     }

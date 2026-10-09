@@ -1,4 +1,6 @@
 import axios from 'axios';
+import Jimp from 'jimp';
+import jsQR from 'jsqr';
 import { config } from '@/configs';
 import { ApiError } from '@/utils/apiResponse';
 import { logger } from '@/utils/logger';
@@ -65,12 +67,34 @@ export class RazorpayQrService {
       return {
         id:           data.id,
         imageUrl:     data.image_url,
-        imageContent: data.image_content ?? null,
+        imageContent: data.image_content ?? (await RazorpayQrService.decodeUpiString(data.image_url)),
         closeBy:      data.close_by,
       };
     } catch (err: unknown) {
       if (err instanceof ApiError) throw err;
       throw new ApiError(502, razorpayErrorMessage(err, 'Failed to create payment QR'));
+    }
+  }
+
+  // Razorpay's API only returns `image_url` — a branded poster (logo, UPI app
+  // icons, business name) with the QR in the middle — not the UPI string
+  // itself. Decoding the poster once here gives the raw `upi://pay?...`
+  // string so radix can render a plain QR natively. Returns null on any
+  // failure; radix then falls back to showing the poster image.
+  static async decodeUpiString(imageUrl: string): Promise<string | null> {
+    try {
+      const res = await axios.get<ArrayBuffer>(imageUrl, { responseType: 'arraybuffer', timeout: 8_000 });
+      const image = await Jimp.read(Buffer.from(res.data));
+      const { data, width, height } = image.bitmap;
+      const decoded = jsQR(new Uint8ClampedArray(data), width, height, { inversionAttempts: 'attemptBoth' });
+      if (!decoded?.data.startsWith('upi://')) {
+        logger.warn('[RazorpayQr] Could not decode a UPI string from the QR image', { imageUrl });
+        return null;
+      }
+      return decoded.data;
+    } catch (err: unknown) {
+      logger.warn('[RazorpayQr] Failed to fetch/decode QR image', { imageUrl, reason: (err as Error)?.message });
+      return null;
     }
   }
 
