@@ -549,13 +549,15 @@ router.post(
  * @swagger
  * /complaint/{id}/record-cash:
  *   post:
- *     summary: Record that the customer paid the full quote in cash to the company (ADMIN)
+ *     summary: Record a full-quote cash payment (ADMIN)
  *     description: >
- *       For a customer who paid at the office rather than to the provider.
- *       Moves PAYMENT → COMPLETED, writes an audit-only CASH debit on the
- *       customer's ledger (wallet balance untouched), credits the provider
- *       their labour only (no cash-offset debit — the company holds the
- *       cash), closes any open payment QR, and logs the admin in ComplaintLog.
+ *       Moves PAYMENT → COMPLETED, closes any open payment QR, and logs the
+ *       admin in ComplaintLog. `collectedBy: COMPANY` (default) — customer
+ *       paid at the office: audit-only CASH debit on the customer's ledger,
+ *       provider credited labour only (company holds the cash).
+ *       `collectedBy: PROVIDER` — provider collected on-site but didn't mark
+ *       it in radix: identical to the provider's own Cash Collect (labour
+ *       credit + full-amount offset debit on the provider's wallet).
  *     tags: [Complaint]
  *     security:
  *       - bearerAuth: []
@@ -567,6 +569,7 @@ router.post(
  *           schema:
  *             type: object
  *             properties:
+ *               collectedBy: { type: string, enum: [COMPANY, PROVIDER], default: COMPANY }
  *               note: { type: string, maxLength: 500 }
  *     responses:
  *       200: { description: Cash recorded, complaint closed }

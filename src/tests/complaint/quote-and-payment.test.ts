@@ -678,6 +678,43 @@ describe('Quote flow', () => {
       expect(log).toMatchObject({ actorId: admin.id, actorRole: 'ADMIN' });
     });
 
+    it('collectedBy PROVIDER: settles like the provider\'s own Cash Collect — labour credit then full-amount offset debit — logged as the admin', async () => {
+      const { customer, provider, admin, complaint } = await paymentStageComplaintWithSplit();
+
+      const res = await testRequest(app)
+        .post(`/api/complaint/${complaint.id}/record-cash`)
+        .set('Authorization', `Bearer ${signAccessToken(admin)}`)
+        .send({ collectedBy: 'PROVIDER' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.complaint.stage).toBe('COMPLETED');
+
+      const providerWallet = await prisma.wallet.findUnique({ where: { userId: provider.id } });
+      expect(providerWallet?.balance).toBe(300 - 600);
+      const providerLedger = await prisma.walletLedger.findMany({ where: { walletId: providerWallet!.id }, orderBy: { createdAt: 'asc' } });
+      expect(providerLedger).toHaveLength(2);
+      expect(providerLedger[0]).toMatchObject({ type: 'CREDIT', amount: 300 });
+      expect(providerLedger[1]).toMatchObject({ type: 'DEBIT', amount: 600 });
+
+      // Same as the provider's own CASH path — customer ledger untouched.
+      expect(await prisma.walletLedger.count({ where: { userId: customer.id } })).toBe(0);
+
+      const log = await prisma.complaintLog.findFirst({ where: { complaintId: complaint.id, toStage: 'COMPLETED' } });
+      expect(log).toMatchObject({ actorId: admin.id, actorRole: 'ADMIN' });
+      expect(log?.metadata).toMatchObject({ method: 'CASH', collectedBy: 'PROVIDER' });
+    });
+
+    it('rejects an unknown collectedBy with 400', async () => {
+      const { admin, complaint } = await paymentStageComplaintWithSplit();
+
+      const res = await testRequest(app)
+        .post(`/api/complaint/${complaint.id}/record-cash`)
+        .set('Authorization', `Bearer ${signAccessToken(admin)}`)
+        .send({ collectedBy: 'CUSTOMER' });
+
+      expect(res.status).toBe(400);
+    });
+
     it('creates the customer wallet for the audit entry when they never had one', async () => {
       const { customer, admin, complaint } = await paymentStageComplaintWithSplit();
 
