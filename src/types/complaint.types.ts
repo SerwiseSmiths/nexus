@@ -95,10 +95,13 @@ export const CompletePaymentSchema = z.object({
   method: z.enum(['CASH', 'WALLET'], 'Please choose a payment method: CASH or WALLET'),
 });
 
-// Admin records that the customer paid the full quote in cash directly to
-// the company (e.g. at the office), not to the provider on-site.
+// Admin records a full-quote cash payment from watchtower. `collectedBy`:
+//   COMPANY  — customer paid us directly (e.g. at the office)
+//   PROVIDER — provider collected it on-site but didn't mark it in radix;
+//              settles exactly like the provider's own Cash Collect
 export const RecordCashPaymentSchema = z.object({
-  note: z.string().trim().max(500, 'Note must be 500 characters or fewer').optional(),
+  collectedBy: z.enum(['COMPANY', 'PROVIDER'], 'collectedBy must be COMPANY or PROVIDER').default('COMPANY'),
+  note:        z.string().trim().max(500, 'Note must be 500 characters or fewer').optional(),
 });
 
 // ---------------------------------------------------------------------------

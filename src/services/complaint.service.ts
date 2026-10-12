@@ -1773,13 +1773,16 @@ export class ComplaintService {
     });
   }
 
-  // ─── Admin: record cash paid directly to the company ──────────────────────
-  // e.g. the customer walked into the office and paid the full quote in cash.
-  // Same end state as any other settlement (complaint COMPLETED, provider
-  // credited their labour), but the company — not the provider — holds the
-  // cash, so there's no provider-side cash offset debit.
+  // ─── Admin: record a cash payment from watchtower ─────────────────────────
+  // collectedBy COMPANY: the customer paid the office directly. The company,
+  // not the provider, holds the cash, so the provider is credited their
+  // labour with no cash-offset debit.
+  // collectedBy PROVIDER: the provider took the cash on-site but never pressed
+  // Cash Collect in radix. Settles as method CASH, identical to the
+  // provider's own action (labour credit + full-amount offset debit); only the
+  // logged actor differs.
 
-  static async recordCashPayment({ complaintId, adminId, note }: RecordCashPaymentInput) {
+  static async recordCashPayment({ complaintId, adminId, collectedBy, note }: RecordCashPaymentInput) {
     const complaint = await prisma.complaint.findFirst({
       where: { id: complaintId, isDeleted: false },
       include: { quote: true },
@@ -1794,11 +1797,11 @@ export class ComplaintService {
 
     return ComplaintService.settlePayment({
       complaint,
-      method:             'ADMIN_CASH',
+      method:             collectedBy === 'PROVIDER' ? 'CASH' : 'ADMIN_CASH',
       actorId:            adminId,
       actorRole:          Role.ADMIN,
       customerLedgerMeta: { collectedBy: 'ADMIN', adminId, ...(note && { note }) },
-      logMetadata:        { ...(note && { note }) },
+      logMetadata:        { collectedBy, recordedByAdmin: true, ...(note && { note }) },
     });
   }
 
