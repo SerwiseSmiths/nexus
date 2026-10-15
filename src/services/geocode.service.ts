@@ -9,7 +9,27 @@ export interface AddressPrediction {
   lat: number;
   lng: number;
   types: string[];
+  // Structured fields — only reverse geocode returns these (from Ola's address_components).
+  area?: string;
+  city?: string;
+  state?: string;
+  country?: string;
+  pinCode?: string;
 }
+
+interface OlaAddressComponent {
+  long_name?: string;
+  short_name?: string;
+  types?: string[];
+}
+
+const pickComponent = (components: OlaAddressComponent[], ...types: string[]): string | undefined => {
+  for (const type of types) {
+    const match = components.find((c) => c.types?.includes(type));
+    if (match?.long_name) return match.long_name;
+  }
+  return undefined;
+};
 
 export const autocompleteAddress = async (input: string): Promise<AddressPrediction[]> => {
   const apiKey = config.olaMapsApiKey;
@@ -48,6 +68,7 @@ export const reverseGeocodeAddress = async (lat: number, lng: number): Promise<A
     name && formatted.startsWith(name)
       ? formatted.slice(name.length).replace(/^[,\s]+/, "")
       : formatted;
+  const components: OlaAddressComponent[] = r.address_components ?? [];
 
   return {
     placeId: r.place_id ?? `${lat},${lng}`,
@@ -57,5 +78,10 @@ export const reverseGeocodeAddress = async (lat: number, lng: number): Promise<A
     lat: r.geometry?.location?.lat ?? lat,
     lng: r.geometry?.location?.lng ?? lng,
     types: r.types ?? [],
+    area: pickComponent(components, "sublocality", "sublocality_level_1", "neighborhood"),
+    city: pickComponent(components, "locality", "administrative_area_level_3", "administrative_area_level_2"),
+    state: pickComponent(components, "administrative_area_level_1"),
+    country: pickComponent(components, "country"),
+    pinCode: pickComponent(components, "postal_code"),
   };
 };
