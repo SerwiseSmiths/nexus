@@ -2,7 +2,7 @@ import { Response, NextFunction, Request } from "express";
 import { z } from "zod";
 import { AuthRequest } from "../middlewares/auth.middleware";
 import { AddressService } from "../services/address.service";
-import { autocompleteAddress, reverseGeocodeAddress } from "../services/geocode.service";
+import { autocompleteAddress, placeDetails, reverseGeocodeAddress } from "../services/geocode.service";
 import { ApiResponse } from "../utils/apiResponse";
 
 const createSchema = z.object({
@@ -33,6 +33,19 @@ export class AddressController {
       }
       const prediction = await reverseGeocodeAddress(lat, lng);
       return ApiResponse.success(res, 200, "Reverse geocode successful", { prediction });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async placeDetails(req: Request, res: Response, next: NextFunction) {
+    try {
+      const placeId = req.query.placeId as string;
+      if (!placeId) {
+        return ApiResponse.error(res, 400, "placeId is required");
+      }
+      const prediction = await placeDetails(placeId);
+      return ApiResponse.success(res, 200, "Place details fetched", { prediction });
     } catch (error) {
       next(error);
     }

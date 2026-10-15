@@ -194,6 +194,26 @@ function assignmentActionSecret(): jwt.Secret {
 
 export type AssignmentAction = 'accept' | 'reject';
 
+// One display line for an address. Map-picked addresses (serwise, watchtower)
+// already hold the full resolved address — incl. city/state/pincode — in
+// addressLineOne, so only the flat/house is prefixed; older ones are assembled
+// from their parts.
+function formatDisplayAddress(address: {
+  houseNo: string;
+  societyName: string;
+  addressLineOne: string | null;
+  area: string | null;
+  city: string | null;
+  pinCode: string | null;
+}): string {
+  if (address.addressLineOne && (!address.city || address.addressLineOne.includes(address.city))) {
+    return [address.houseNo, address.addressLineOne].filter(Boolean).join(', ');
+  }
+  return [address.houseNo, address.societyName, address.addressLineOne, address.area, address.city, address.pinCode]
+    .filter(Boolean)
+    .join(', ');
+}
+
 // Everything radix's native floating job card shows (mirrors the in-app
 // NewJobPopup: job title, device pill, customer, address, call/location) —
 // sent in the assignment push because native code can't fetch the complaint
@@ -208,9 +228,11 @@ function assignmentPushDetails(complaint: ComplaintWithRelations): Record<string
     deviceLabel:   requested[0]?.deviceKey ?? '',
     customerName:  `${complaint.user?.firstName ?? ''} ${complaint.user?.lastName ?? ''}`.trim(),
     customerPhone: complaint.user?.phoneNo ?? '',
-    address:       address
-      ? [address.houseNo, address.societyName, address.area, address.city].filter(Boolean).join(', ')
-      : '',
+    address:       address ? formatDisplayAddress(address) : '',
+    // The saved map pin — radix opens Maps at this exact point instead of
+    // text-searching the address (which can land on the wrong building).
+    latitude:      address?.latitude ?? '',
+    longitude:     address?.longitude ?? '',
   };
   return Object.fromEntries(Object.entries(details).filter(([, v]) => v));
 }

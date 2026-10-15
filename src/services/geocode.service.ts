@@ -9,7 +9,7 @@ export interface AddressPrediction {
   lat: number;
   lng: number;
   types: string[];
-  // Structured fields — only reverse geocode returns these (from Ola's address_components).
+  // Structured fields — only reverse geocode / place details return these (from Ola's address_components).
   area?: string;
   city?: string;
   state?: string;
@@ -61,7 +61,25 @@ export const reverseGeocodeAddress = async (lat: number, lng: number): Promise<A
   const results: any[] = response.data?.results ?? [];
   if (!results.length) return null;
 
-  const r = results[0];
+  return toStructuredPrediction(results[0], lat, lng);
+};
+
+/** Autocomplete coordinates are rounded to 4 decimals (~11 m); place details
+ *  returns the place's full-precision point plus address_components. */
+export const placeDetails = async (placeId: string): Promise<AddressPrediction | null> => {
+  const apiKey = config.olaMapsApiKey;
+
+  const response = await axios.get("https://api.olamaps.io/places/v1/details", {
+    params: { place_id: placeId, api_key: apiKey },
+  });
+
+  const r = response.data?.result;
+  if (!r?.geometry?.location) return null;
+
+  return toStructuredPrediction(r, r.geometry.location.lat, r.geometry.location.lng);
+};
+
+const toStructuredPrediction = (r: any, lat: number, lng: number): AddressPrediction => {
   const formatted: string = r.formatted_address ?? "";
   const name: string = r.name ?? r.address_components?.[0]?.long_name ?? "";
   const secondary =

@@ -330,6 +330,8 @@ src/tests/dbHelpers.ts                  — resetAllTestTables, extended for Quo
 
 ## 14. Change Log
 
+- **2026-10-15** — Job-assignment push (`assignmentPushDetails`) now sends `address` via `formatDisplayAddress` (houseNo + the full map-resolved `addressLineOne` when present, else assembled parts incl. pincode) plus `latitude`/`longitude`. Radix's NewJobPopup and native floating card open Maps at that pin instead of text-searching the address.
+
 - **2026-10-12** — `record-cash` takes `collectedBy: COMPANY | PROVIDER` (default COMPANY, so old callers are unchanged). PROVIDER is for "the provider took cash on-site but never pressed Cash Collect": it settles as method `CASH`, the same as the provider's own action (labour credit + full-amount offset debit, customer ledger untouched), with the admin as the logged actor and `collectedBy` in the log metadata. Watchtower's Record Cash Payment popup gained an "Office / Provider" choice. 2 new tests (116 total in the complaint suite). §7.3 below still describes only the COMPANY case.
 
 - **2026-10-09** — `PATCH /:id/complete-service` now also accepts ADMIN (on the assigned provider's behalf, ownership filter skipped, logged `actorRole: ADMIN`). The write is now a guarded `updateMany` on `stage: IN_PROGRESS` (409 if provider and admin race). Watchtower: "Mark Work Completed" button (`MarkWorkCompleted.tsx`), IN_PROGRESS tickets only. 2 new tests (114 total in the complaint suite).
