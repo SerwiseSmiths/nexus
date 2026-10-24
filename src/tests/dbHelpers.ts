@@ -42,6 +42,7 @@ export async function resetAllTestTables() {
   await prisma.deviceTypeGroup.deleteMany({});
   await prisma.address.deleteMany({});
   await prisma.otp.deleteMany({});
+  await prisma.providerSignupRequest.deleteMany({});
   await prisma.user.deleteMany({});
   await seedDeviceTypeGroups();
 }
