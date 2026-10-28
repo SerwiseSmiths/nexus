@@ -19,6 +19,7 @@ import subscriptionRoutes from './subscription.route';
 import otaRoutes from './ota.route';
 import cacheRoutes from './cache.route';
 import whatsappRoutes from './whatsapp.route';
+import providerSignupRoutes from './provider-signup.route';
 import { RealtimeService } from '@/services/realtime.service';
 import { getSupabaseConfig } from '@/configs/supabase.config';
 
@@ -44,6 +45,7 @@ router.use('/subscription', subscriptionRoutes);
 router.use('/ota', otaRoutes);
 router.use('/cache', cacheRoutes);
 router.use('/whatsapp', whatsappRoutes);
+router.use('/provider-signup', providerSignupRoutes);  // POST is public (website "Join Serwise")
 
 // ─── Dev-only: test Supabase broadcast ───────────────────────────────────────
 // POST /api/debug/broadcast  { userId, event?, payload? }

@@ -89,6 +89,12 @@ enum PayoutRequestStatus {
   PAID
 }
 
+enum ProviderSignupStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum PaymentProvider {
   RAZORPAY
   ADMIN
@@ -627,6 +633,32 @@ model PayoutRequest {
 
   @@index([walletId])
   @@index([userId, createdAt(sort: Desc)])
+}
+
+// "Join Serwise" requests from the website — would-be providers asking to be
+// onboarded. Provider accounts are still created only by an admin (watchtower);
+// creating a provider with a matching phone marks the pending request APPROVED.
+model ProviderSignupRequest {
+  id              String               @id @default(uuid())
+  firstName       String
+  lastName        String
+  phoneNo         String
+  city            String
+  deviceTypes     DeviceType[]
+  experienceYears Int?
+  status          ProviderSignupStatus @default(PENDING)
+  adminNotes      String?
+  // The provider account created from this request (plain id, no relation —
+  // the request outlives any later change to that user)
+  providerId      String?
+  reviewedAt      DateTime?
+  isDeleted       Boolean              @default(false)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  @@index([phoneNo, status])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([providerId])
 }
 
 model DeviceToken {

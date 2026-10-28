@@ -4,6 +4,7 @@ import { UploadService } from '@/services/upload.service';
 import { AddressService } from '@/services/address.service';
 import { BankService } from '@/services/bank.service';
 import { DeviceTypeGroupService } from '@/services/device-type-group.service';
+import { ProviderSignupService } from '@/services/provider-signup.service';
 import { ApiError } from '@/utils/apiResponse';
 import { generateUniqueReferralCode } from '@/utils/referralCode';
 import type {
@@ -473,6 +474,9 @@ export class UserService {
           aadharAddressId,
         },
       });
+
+      // Onboarding a "Join Serwise" applicant closes their pending request
+      await ProviderSignupService.markApprovedForProvider(tx, created.phoneNo, created.id);
 
       return tx.user.findUniqueOrThrow({ where: { id: created.id }, select: PROVIDER_DETAIL_SELECT });
     });
