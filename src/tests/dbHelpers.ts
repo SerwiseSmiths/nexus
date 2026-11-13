@@ -28,6 +28,9 @@ export async function seedDeviceTypeGroups() {
 // is re-seeded after every reset so every test starts with the standard
 // one-group-per-type set.
 export async function resetAllTestTables() {
+  await prisma.paymentOrder.deleteMany({});
+  await prisma.paymentSession.deleteMany({});
+  await prisma.payoutRequest.deleteMany({});
   await prisma.walletLedger.deleteMany({});
   await prisma.deviceWorkHistory.deleteMany({});
   await prisma.quote.deleteMany({});
@@ -38,6 +41,8 @@ export async function resetAllTestTables() {
   await prisma.wallet.deleteMany({});
   await prisma.providerProfile.deleteMany({});
   await prisma.complaint.deleteMany({});
+  await prisma.subscriptionService.deleteMany({});
+  await prisma.subscription.deleteMany({});
   await prisma.device.deleteMany({});
   await prisma.deviceTypeGroup.deleteMany({});
   await prisma.address.deleteMany({});

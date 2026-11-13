@@ -9,6 +9,9 @@ export interface CreditWalletBody {
   paymentProvider?: PaymentProvider;
   // When false, ledger entry is created for audit but wallet.balance is NOT updated
   updateBalance?:  boolean;
+  // Admin credits/debits: a retried request with the same key returns the
+  // original ledger entry instead of moving money a second time.
+  idempotencyKey?: string;
 }
 
 export interface DebitWalletBody {
@@ -19,6 +22,7 @@ export interface DebitWalletBody {
   meta?:           Record<string, unknown>;
   paymentProvider?: PaymentProvider;
   updateBalance?:  boolean;
+  idempotencyKey?: string;
 }
 
 export interface CreditWalletInput extends CreditWalletBody {}

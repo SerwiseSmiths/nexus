@@ -1,11 +1,17 @@
 import { z } from 'zod';
+import type { PaymentOrderStatus } from '@prisma/client';
 import type { AddonSnapshot } from '@/types/subscription.types';
 
 // ─── Razorpay order creation ──────────────────────────────────────────────────
 
+export const PAYMENT_PURPOSES = ['subscription', 'recharge', 'complaint_payment'] as const;
+export type PaymentPurpose = (typeof PAYMENT_PURPOSES)[number];
+
 export const CreateRazorpayOrderSchema = z.object({
-  amount: z.number().int().positive(), // in paise
-  purpose: z.string().default('subscription'),
+  // In paise. Never trusted as the price — the server computes what the
+  // purpose costs and rejects a mismatch (see PaymentService.resolveOrder).
+  amount: z.number().int().positive(),
+  purpose: z.enum(PAYMENT_PURPOSES).default('subscription'),
   meta: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -14,7 +20,7 @@ export type CreateRazorpayOrderBody = z.infer<typeof CreateRazorpayOrderSchema>;
 export type CreateRazorpayOrderInput = {
   amount:   number;
   userId:   string;
-  purpose:  string;
+  purpose:  PaymentPurpose;
   meta?:    Record<string, unknown>;
 };
 
@@ -24,6 +30,43 @@ export type RazorpayOrderResult = {
   currency: string;
   keyId:    string;
 };
+
+export type PaymentOrderStatusResult = {
+  orderId: string;
+  purpose: string;
+  status:  PaymentOrderStatus;
+  amount:  number; // paise
+};
+
+// ─── Per-purpose meta (validated at order creation, stored in PaymentOrder.meta)
+
+// Addon prices sent by the client are ignored — only the keys are used, and
+// each addon is re-priced from the CMS before the order is created.
+export const SubscriptionOrderMetaSchema = z.object({
+  deviceTypeKey: z.string().min(1),
+  planKey:       z.string().min(1),
+  billingCycle:  z.enum(['ANNUAL', 'MONTHLY']),
+  addons:        z.array(z.object({ key: z.string().min(1) }).passthrough()).default([]),
+  startDate:     z.string().datetime({ message: 'startDate must be an ISO datetime string' }),
+});
+
+// Website booking-fee QR — the amount and meta are checked exactly like a
+// complaint_payment order (see PaymentService.resolveOrder).
+export const CreateBookingQrSchema = z.object({
+  amount: z.number().int().positive(), // in paise
+  meta:   z.record(z.string(), z.unknown()),
+});
+
+export const ComplaintPaymentMetaSchema = z.object({
+  serviceType:      z.string().optional(),
+  deviceLines:      z.string().optional(),
+  addressId:        z.string().min(1, 'addressId is required'),
+  requestedDevices: z
+    .array(z.object({ deviceKey: z.string().min(1), quantity: z.number().int().positive() }))
+    .min(1, 'requestedDevices is required'),
+  tags:             z.array(z.string()).optional(),
+  notes:            z.string().optional(),
+});
 
 // ─── Subscription payment meta (stored in PaymentOrder.meta) ─────────────────
 
@@ -35,65 +78,15 @@ export type SubscriptionPaymentMeta = {
   startDate:     string;
 };
 
-// ─── Payment Session — created before WebView opens, matched by webhook ──────
-
-export const CreatePaymentSessionSchema = z.object({
-  amountRupees: z.number().positive(),
-  purpose:      z.string().min(1),
-  meta:         z.record(z.string(), z.unknown()).optional(),
-});
-
-export type CreatePaymentSessionBody  = z.infer<typeof CreatePaymentSessionSchema>;
-export type CreatePaymentSessionInput = CreatePaymentSessionBody & { userId: string; phone: string };
-
-export type CreatePaymentSessionResult = {
-  sessionId: string;
-};
-
-// ─── Payment Link (WebView) — dynamic link with exact amount, no JS injection ─
-
-export const CreatePaymentLinkSchema = z.object({
-  amountRupees: z.number().positive(),
-  purpose:      z.string().min(1),
-  meta:         z.record(z.string(), z.unknown()).optional(),
-  description:  z.string().optional(),
-});
-
-export type CreatePaymentLinkBody  = z.infer<typeof CreatePaymentLinkSchema>;
-export type CreatePaymentLinkInput = CreatePaymentLinkBody & { userId: string; userName?: string; userPhone?: string; userEmail?: string };
-
-export type CreatePaymentLinkResult = {
-  url:    string; // short_url to load in WebView
-  linkId: string; // plink_xxx — used for idempotency
-};
-
-// ─── WebView (link-based) completion — used before API keys are available ────
-
-export const WebviewCompleteSchema = z.object({
-  paymentId:    z.string().min(1),
-  purpose:      z.string().min(1),
-  amountRupees: z.number().positive(),
-  meta:         z.record(z.string(), z.unknown()).optional(),
-});
-
-export type WebviewCompleteBody  = z.infer<typeof WebviewCompleteSchema>;
-export type WebviewCompleteInput = WebviewCompleteBody & { userId: string };
-
-export type WebviewCompleteResult = {
-  purpose:        string;
-  subscriptionId?: string;
-  walletBalance?:  number;
-};
-
 // ─── Razorpay webhook ─────────────────────────────────────────────────────────
 
 export type RazorpayPaymentEntity = {
   id:       string;
-  order_id: string | null; // null for payment-link payments (no order created)
+  order_id: string | null;
   amount:   number;        // in paise
   currency: string;
   status:   string;
-  contact:  string | null; // user's phone number — used to match PaymentSession
+  contact:  string | null;
 };
 
 export type RazorpayQrCodeEntity = {

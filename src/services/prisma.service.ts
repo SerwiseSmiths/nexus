@@ -10,10 +10,11 @@ let _client: PrismaClient | null = null;
 function getClient(): PrismaClient {
   if (!_client) {
     // Neon's serverless WebSocket adapter requires a real Neon endpoint — it
-    // can't reach the plain local Postgres `nexus_test` database the test
-    // suite runs against (see docs/authentication.md §9). Every other
-    // environment (local dev against Neon, staging, prod) uses the adapter.
-    if (process.env.NODE_ENV === 'test') {
+    // can't reach a plain local Postgres database such as `nexus_test` (Jest)
+    // or `nexus_e2e` (end-to-end stack; see docs/authentication.md §9). Every
+    // Neon-hosted environment (local dev against Neon, staging, prod) uses the adapter.
+    const isNeon = /\.neon\.tech\b/.test(process.env.DATABASE_URL ?? '');
+    if (process.env.NODE_ENV === 'test' || !isNeon) {
       _client = new PrismaClient();
     } else {
       const adapter = new PrismaNeon({ connectionString: process.env.DATABASE_URL });

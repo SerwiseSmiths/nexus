@@ -2,6 +2,7 @@ import { PaymentProvider, PayoutRequestStatus, Prisma, Role, WalletLedgerSource,
 import prisma from '@/services/prisma.service';
 import { ApiError } from '@/utils/apiResponse';
 import { logger } from '@/utils/logger';
+import { withSerializableRetry } from '@/utils/serializableRetry';
 import type {
   CreditWalletInput,
   DebitWalletInput,
@@ -13,23 +14,79 @@ import type {
 
 type TxClient = Prisma.TransactionClient;
 
+// Balances are Float rupees — keep every computed balance to whole paise so
+// float error can't accumulate across ledger rows.
+const toPaiseRounded = (rupees: number) => Math.round(rupees * 100) / 100;
+
 export class WalletService {
+  // Returns the ledger row an earlier request with this idempotency key
+  // already created, if any. Callers run it inside a Serializable
+  // transaction so two concurrent retries can't both miss it.
+  //
+  // A key only replays the *same* operation. Reused for a different type,
+  // source or amount (e.g. an admin edited the amount and retried in the
+  // same drawer), it's refused — returning the earlier row would report an
+  // amount that was never moved.
+  private static async findIdempotentLedger(
+    tx: TxClient,
+    userId: string,
+    idempotencyKey: string | undefined,
+    expected: { type: WalletLedgerType; source: WalletLedgerSource; amount: number },
+  ) {
+    if (!idempotencyKey) return null;
+    const row = await tx.walletLedger.findFirst({
+      where: { userId, isDeleted: false, meta: { path: ['idempotencyKey'], equals: idempotencyKey } },
+    });
+    if (
+      row &&
+      (row.type !== expected.type ||
+        row.source !== expected.source ||
+        toPaiseRounded(row.amount) !== toPaiseRounded(expected.amount))
+    ) {
+      throw new ApiError(
+        409,
+        `This request was already recorded as a ${row.type.toLowerCase()} of ₹${row.amount} — refresh and start a new one`,
+      );
+    }
+    return row;
+  }
+
   // PROVIDER users get a PROVIDER (earnings) wallet; everyone else gets a CUSTOMER (spend) wallet.
   private static roleToWalletType(role: Role): WalletType {
     return role === Role.PROVIDER ? WalletType.PROVIDER : WalletType.CUSTOMER;
   }
 
-  static async getOrCreateWallet(userId: string) {
-    const existing = await prisma.wallet.findUnique({ where: { userId } });
+  // Returns the user's wallet, creating it if they never had one (admin-created
+  // customers/providers start without). INSERT … ON CONFLICT DO NOTHING, not
+  // find-then-create: two first-time credits (e.g. two recharge webhooks)
+  // racing here must both succeed — a unique-constraint error would mark a
+  // paid order FAILED.
+  private static async ensureWalletTx(tx: TxClient, userId: string) {
+    const existing = await tx.wallet.findUnique({ where: { userId } });
     if (existing) return existing;
 
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+    const user = await tx.user.findUnique({ where: { id: userId }, select: { role: true } });
     if (!user) throw new ApiError(404, 'User not found');
 
     logger.info('Auto-creating wallet', { userId });
-    return prisma.wallet.create({
-      data: { userId, walletType: WalletService.roleToWalletType(user.role) },
+    await tx.wallet.createMany({
+      data:           [{ userId, walletType: WalletService.roleToWalletType(user.role) }],
+      skipDuplicates: true,
     });
+    return tx.wallet.findUniqueOrThrow({ where: { userId } });
+  }
+
+  static async getOrCreateWallet(userId: string) {
+    return prisma.$transaction((tx) => WalletService.ensureWalletTx(tx, userId));
+  }
+
+  // For checks made before taking a customer's money (PaymentService.resolveOrder):
+  // a wallet that exists but is deactivated can't be credited.
+  static async assertWalletCanReceive(userId: string) {
+    const wallet = await prisma.wallet.findUnique({ where: { userId }, select: { isActive: true, isDeleted: true } });
+    if (wallet && (!wallet.isActive || wallet.isDeleted)) {
+      throw new ApiError(403, 'Your wallet is inactive — please contact support');
+    }
   }
 
   static async getWallet(userId: string) {
@@ -51,53 +108,62 @@ export class WalletService {
       meta,
       paymentProvider,
       updateBalance = true, // default: actually credit the wallet
+      idempotencyKey,
     } = input;
 
     if (amount <= 0) throw new ApiError(400, 'Amount must be greater than 0');
 
-    const existing = await tx.wallet.findUnique({ where: { userId } });
-    const wallet = existing ?? (await (async () => {
-      const user = await tx.user.findUnique({ where: { id: userId }, select: { role: true } });
-      if (!user) throw new ApiError(404, 'User not found');
-      return tx.wallet.create({
-        data: { userId, walletType: WalletService.roleToWalletType(user.role) },
-      });
-    })());
+    const replay = await WalletService.findIdempotentLedger(tx, userId, idempotencyKey, {
+      type: WalletLedgerType.CREDIT, source, amount,
+    });
+    if (replay) {
+      const wallet = await tx.wallet.findUniqueOrThrow({ where: { id: replay.walletId } });
+      return { wallet, ledger: replay };
+    }
+
+    const wallet = await WalletService.ensureWalletTx(tx, userId);
 
     if (!wallet.isActive) throw new ApiError(403, 'Wallet is inactive');
 
-    const openingBalance  = wallet.balance;
-    const closingBalance  = updateBalance ? openingBalance + amount : openingBalance;
+    // Atomic increment, not "write back opening + amount": credits run at the
+    // default isolation level, and a read-then-write would silently lose a
+    // debit (or another credit) that committed in between.
+    const updatedWallet = updateBalance
+      ? await tx.wallet.update({
+          where: { id: wallet.id },
+          data:  { balance: { increment: amount } },
+        })
+      : wallet;
+    const closingBalance = toPaiseRounded(updatedWallet.balance);
+    const openingBalance = updateBalance ? toPaiseRounded(closingBalance - amount) : wallet.balance;
 
-    const [updatedWallet, ledger] = await Promise.all([
-      updateBalance
-        ? tx.wallet.update({
-            where: { id: wallet.id },
-            data:  { balance: closingBalance },
-          })
-        : Promise.resolve(wallet),
-      tx.walletLedger.create({
-        data: {
-          walletId:       wallet.id,
-          userId,
-          type:           WalletLedgerType.CREDIT,
-          source,
-          amount,
-          openingBalance,
-          closingBalance,
-          updateBalance,
-          ...(refId           && { refId }),
-          ...(meta            && { meta: meta as Prisma.InputJsonValue }),
-          ...(paymentProvider && { paymentProvider }),
-        },
-      }),
-    ]);
+    const ledger = await tx.walletLedger.create({
+      data: {
+        walletId:       wallet.id,
+        userId,
+        type:           WalletLedgerType.CREDIT,
+        source,
+        amount,
+        openingBalance,
+        closingBalance,
+        updateBalance,
+        ...(refId           && { refId }),
+        ...((meta || idempotencyKey) && { meta: { ...meta, ...(idempotencyKey && { idempotencyKey }) } as Prisma.InputJsonValue }),
+        ...(paymentProvider && { paymentProvider }),
+      },
+    });
 
     return { wallet: updatedWallet, ledger };
   }
 
   static async creditWallet(input: CreditWalletInput) {
-    return prisma.$transaction((tx) => WalletService.creditWalletTx(tx, input));
+    // An idempotent (admin) credit needs Serializable so two concurrent
+    // retries can't both miss each other's ledger row; plain credits stay at
+    // the default level so a webhook recharge never fails on a conflict.
+    return withSerializableRetry(() => prisma.$transaction(
+      (tx) => WalletService.creditWalletTx(tx, input),
+      input.idempotencyKey ? { isolationLevel: Prisma.TransactionIsolationLevel.Serializable } : undefined,
+    ), 'Wallet credit');
   }
 
   // Sanctioned entry point for crediting a provider's earnings on complaint completion.
@@ -145,7 +211,7 @@ export class WalletService {
     if (wallet.balance < amount) throw new ApiError(400, 'Insufficient wallet balance to complete this payment');
 
     const openingBalance = wallet.balance;
-    const closingBalance = openingBalance - amount;
+    const closingBalance = toPaiseRounded(openingBalance - amount);
 
     await tx.wallet.update({ where: { id: wallet.id }, data: { balance: closingBalance } });
     await tx.walletLedger.create({
@@ -172,9 +238,18 @@ export class WalletService {
       meta,
       paymentProvider,
       updateBalance = true,
+      idempotencyKey,
     } = input;
 
     if (amount <= 0) throw new ApiError(400, 'Amount must be greater than 0');
+
+    const replay = await WalletService.findIdempotentLedger(tx, userId, idempotencyKey, {
+      type: WalletLedgerType.DEBIT, source, amount,
+    });
+    if (replay) {
+      const wallet = await tx.wallet.findUniqueOrThrow({ where: { id: replay.walletId } });
+      return { wallet, ledger: replay };
+    }
 
     const wallet = await tx.wallet.findUnique({ where: { userId, isDeleted: false } });
     if (!wallet) throw new ApiError(404, 'Wallet not found');
@@ -189,7 +264,7 @@ export class WalletService {
     }
 
     const openingBalance = wallet.balance;
-    const closingBalance = updateBalance ? openingBalance - amount : openingBalance;
+    const closingBalance = updateBalance ? toPaiseRounded(openingBalance - amount) : openingBalance;
 
     const [updatedWallet, ledger] = await Promise.all([
       updateBalance
@@ -209,7 +284,7 @@ export class WalletService {
           closingBalance,
           updateBalance,
           ...(refId           && { refId }),
-          ...(meta            && { meta: meta as Prisma.InputJsonValue }),
+          ...((meta || idempotencyKey) && { meta: { ...meta, ...(idempotencyKey && { idempotencyKey }) } as Prisma.InputJsonValue }),
           ...(paymentProvider && { paymentProvider }),
         },
       }),
@@ -220,10 +295,10 @@ export class WalletService {
 
   static async debitWallet(input: DebitWalletInput) {
     // Serializable isolation prevents concurrent overdrafts
-    return prisma.$transaction(
+    return withSerializableRetry(() => prisma.$transaction(
       (tx) => WalletService.debitWalletTx(tx, input),
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
+    ), 'Wallet debit');
   }
 
   // Sanctioned entry point for reclaiming a CASH payment the provider
@@ -261,8 +336,9 @@ export class WalletService {
   // at the office. wallet.balance is never touched (updateBalance: false);
   // this exists so the customer's ledger still shows what they paid for the
   // job and how. Creates the wallet if the customer never had one — unlike
-  // debitCustomerForComplaintPayment, no balance is needed. Requires the
-  // caller's transaction so the entry commits with the complaint closing.
+  // debitCustomerForComplaintPayment, no balance is needed, and an inactive
+  // wallet doesn't block it (nothing is charged to it). Also used for the
+  // online ₹185 booking fee (PaymentService.fulfillComplaintPayment).
   static async recordCustomerComplaintPayment(
     userId: string,
     amount: number,
@@ -271,15 +347,11 @@ export class WalletService {
     meta: Record<string, unknown>,
     tx: TxClient,
   ) {
-    if (amount <= 0) return;
+    if (amount <= 0) return null;
 
-    const wallet = await tx.wallet.upsert({
-      where:  { userId },
-      create: { userId, walletType: WalletType.CUSTOMER },
-      update: {},
-    });
+    const wallet = await WalletService.ensureWalletTx(tx, userId);
 
-    await tx.walletLedger.create({
+    return tx.walletLedger.create({
       data: {
         walletId:       wallet.id,
         userId,
@@ -317,7 +389,7 @@ export class WalletService {
 
     if (amount <= 0) throw new ApiError(400, 'Amount must be greater than 0');
 
-    return prisma.$transaction(
+    return withSerializableRetry(() => prisma.$transaction(
       async (tx) => {
         const [recipient, sender] = await Promise.all([
           tx.user.findUnique({ where: { phoneNo: recipientPhone, isDeleted: false } }),
@@ -332,11 +404,7 @@ export class WalletService {
 
         const [senderWallet, recipientWallet] = await Promise.all([
           tx.wallet.findUnique({ where: { userId: senderUserId, isDeleted: false } }),
-          tx.wallet.upsert({
-            where:  { userId: recipient.id },
-            create: { userId: recipient.id, walletType: WalletService.roleToWalletType(recipient.role) },
-            update: {},
-          }),
+          WalletService.ensureWalletTx(tx, recipient.id),
         ]);
 
         if (!senderWallet)           throw new ApiError(404, 'Sender wallet not found');
@@ -348,9 +416,9 @@ export class WalletService {
         if (senderWallet.balance < amount) throw new ApiError(400, 'Insufficient wallet balance');
 
         const senderOpening    = senderWallet.balance;
-        const senderClosing    = senderOpening - amount;
+        const senderClosing    = toPaiseRounded(senderOpening - amount);
         const recipientOpening = recipientWallet.balance;
-        const recipientClosing = recipientOpening + amount;
+        const recipientClosing = toPaiseRounded(recipientOpening + amount);
 
         await Promise.all([
           tx.wallet.update({ where: { id: senderWallet.id },    data: { balance: senderClosing } }),
@@ -386,7 +454,7 @@ export class WalletService {
         return { newBalance: senderClosing };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
+    ), 'Send money');
   }
 
   // ─── Provider Payouts ──────────────────────────────────────────────────────
@@ -398,17 +466,34 @@ export class WalletService {
     const { userId, amount } = input;
     if (amount <= 0) throw new ApiError(400, 'Amount must be greater than 0');
 
-    const wallet = await prisma.wallet.findUnique({ where: { userId, isDeleted: false } });
-    if (!wallet) throw new ApiError(404, 'Wallet not found');
-    if (wallet.walletType !== WalletType.PROVIDER) {
-      throw new ApiError(403, 'Only provider wallets can request a payout');
-    }
-    if (!wallet.isActive) throw new ApiError(403, 'Wallet is inactive');
-    if (wallet.balance < amount) throw new ApiError(400, 'Insufficient wallet balance');
+    // Serializable: the pending-sum check below must see a concurrent
+    // request, or two taps could together ask for more than the balance.
+    return prisma.$transaction(
+      async (tx) => {
+        const wallet = await tx.wallet.findUnique({ where: { userId, isDeleted: false } });
+        if (!wallet) throw new ApiError(404, 'Wallet not found');
+        if (wallet.walletType !== WalletType.PROVIDER) {
+          throw new ApiError(403, 'Only provider wallets can request a payout');
+        }
+        if (!wallet.isActive) throw new ApiError(403, 'Wallet is inactive');
 
-    return prisma.payoutRequest.create({
-      data: { walletId: wallet.id, userId, amount },
-    });
+        // PENDING requests aren't debited until approved, so they still count
+        // against the balance here.
+        const pending = await tx.payoutRequest.aggregate({
+          where: { userId, status: PayoutRequestStatus.PENDING, isDeleted: false },
+          _sum:  { amount: true },
+        });
+        const available = toPaiseRounded(wallet.balance - (pending._sum.amount ?? 0));
+        if (available < amount) {
+          throw new ApiError(400, `Insufficient balance — ₹${Math.max(available, 0)} available after pending payout requests`);
+        }
+
+        return tx.payoutRequest.create({
+          data: { walletId: wallet.id, userId, amount },
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
   }
 
   static async getPayoutRequests(userId: string) {
@@ -421,27 +506,49 @@ export class WalletService {
   static async updatePayoutRequestStatus(input: UpdatePayoutRequestInput) {
     const { payoutRequestId, status, adminId } = input;
 
-    const payoutRequest = await prisma.payoutRequest.findFirst({
-      where: { id: payoutRequestId, isDeleted: false },
-    });
-    if (!payoutRequest) throw new ApiError(404, 'Payout request not found');
-    if (payoutRequest.status !== PayoutRequestStatus.PENDING) {
-      throw new ApiError(400, `Payout request is already ${payoutRequest.status}`);
-    }
+    // Allowed transitions. The wallet is debited exactly once, when a request
+    // leaves PENDING for APPROVED or PAID; APPROVED → PAID just records that
+    // the admin has now sent the money. An APPROVED request can't be rejected
+    // here — that would need the debit reversed.
+    const allowedFrom: PayoutRequestStatus[] =
+      status === PayoutRequestStatus.PAID
+        ? [PayoutRequestStatus.PENDING, PayoutRequestStatus.APPROVED]
+        : [PayoutRequestStatus.PENDING];
 
-    if (status === PayoutRequestStatus.APPROVED || status === PayoutRequestStatus.PAID) {
-      await WalletService.debitWallet({
-        userId: payoutRequest.userId,
-        amount: payoutRequest.amount,
-        source: WalletLedgerSource.WITHDRAWAL,
-        refId:  payoutRequest.id,
-      });
-    }
+    // One transaction: claim the transition and debit together, so a
+    // double-click or two admins can't both debit, and a debit can never
+    // commit while the request still reads PENDING.
+    return prisma.$transaction(
+      async (tx) => {
+        const payoutRequest = await tx.payoutRequest.findFirst({
+          where: { id: payoutRequestId, isDeleted: false },
+        });
+        if (!payoutRequest) throw new ApiError(404, 'Payout request not found');
 
-    return prisma.payoutRequest.update({
-      where: { id: payoutRequestId },
-      data:  { status, adminId, processedAt: new Date() },
-    });
+        const claimed = await tx.payoutRequest.updateMany({
+          where: { id: payoutRequestId, status: { in: allowedFrom }, isDeleted: false },
+          data:  { status, adminId, processedAt: new Date() },
+        });
+        if (claimed.count === 0) {
+          throw new ApiError(409, `Payout request is already ${payoutRequest.status}`);
+        }
+
+        const needsDebit =
+          payoutRequest.status === PayoutRequestStatus.PENDING &&
+          (status === PayoutRequestStatus.APPROVED || status === PayoutRequestStatus.PAID);
+        if (needsDebit) {
+          await WalletService.debitWalletTx(tx, {
+            userId: payoutRequest.userId,
+            amount: payoutRequest.amount,
+            source: WalletLedgerSource.WITHDRAWAL,
+            refId:  payoutRequest.id,
+          });
+        }
+
+        return tx.payoutRequest.findUniqueOrThrow({ where: { id: payoutRequestId } });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
   }
 
   static async getWalletHistory(input: GetWalletHistoryInput) {

@@ -182,7 +182,7 @@ Provider-only, must be in `PAYMENT` stage. `method` is `CASH` or `WALLET` (`Comp
 - This debit runs **inside the same transaction** as the complaint's stage update and the provider's credit (`WalletService.creditProviderEarnings`), now at **`Serializable`** isolation — a failed/insufficient debit rolls back everything: complaint stays in `PAYMENT`, provider isn't credited, customer isn't charged. No path exists where one side moves without the other.
 - `CASH`: no customer-side wallet interaction (still true) — but see the labour-split fix below, which does now touch the *provider's* wallet even for CASH.
 
-This module has **no gateway-verified online payment path** for job completion — `CASH`/`WALLET` are the only two methods, and neither talks to Razorpay. (A *separate*, unrelated Razorpay flow exists in `payment.service.ts` for `purpose: 'complaint_payment'` — that's for creating a complaint *after* an externally-verified Razorpay payment, a different product flow entirely, not something `completePayment` reuses.)
+This module has **no gateway-verified online payment path** for job completion via `completePayment` — the provider can only send `CASH` (since 2026-11-03; `WALLET` was removed for providers, see Change Log). Customers pay online through the provider's UPI QR (`getPaymentQr` → `qr_code.credited` webhook → `settleViaUpiQr`). (A *separate*, unrelated Razorpay flow exists in `payment.service.ts` for `purpose: 'complaint_payment'` — that's for creating a complaint *after* an externally-verified Razorpay payment, a different product flow entirely, not something `completePayment` reuses.)
 
 ### 7.1 Provider payout now reflects labour, not the full quote total (added 2026-09-27)
 
@@ -329,6 +329,17 @@ src/tests/dbHelpers.ts                  — resetAllTestTables, extended for Quo
 ---
 
 ## 14. Change Log
+
+- **2026-11-08** — Fixes from the payment e2e suite (`e2e/`, `PAYMENT_AUDIT_TODO.md` §E):
+  - `settlePayment`'s Serializable transaction is retried on a serialization conflict (P2034, `utils/serializableRetry.ts`). Before, a concurrent write to the complaint made a paid UPI QR permanently FAILED (E2). A retry that loses the stage claim gets the normal "already been paid" 409, which is also what a second admin recording cash now sees.
+  - `addQuote` `priceOverridden`: a part the CMS can't load now returns 502 instead of saving ₹0 provider labour (E11). `AddQuoteSchema` limits `unitPrice`/`labour` to 2 decimals, and the quote total is rounded to whole paise (E10).
+  - The online ₹185 booking fee's audit ledger row now uses `recordCustomerComplaintPayment`, which creates a missing wallet. Once the complaints exist, nothing can mark the order FAILED (E4). `resolveOrder` refuses an unknown `deviceKey` (or one with no device group) before payment (E5).
+
+- **2026-11-03** — Money hardening (see `PAYMENT_AUDIT_TODO.md` at the repo root):
+  - `PATCH /:id/complete-payment` (provider) accepts `CASH` only. `WALLET` debited the customer's wallet on the provider's say-so with no customer action. `settlePayment` still supports `WALLET` internally for a future customer-confirmed flow.
+  - `addQuote`: custom items (no `partId`) and `priceOverridden` are admin-only (403 for a provider). They set the price, and a custom item also sets the provider's own labour cut. A catalogue part the CMS can't resolve now fails with 502 instead of silently trusting the client's `unitPrice`.
+  - A UPI QR payment that can't be applied now emits `complaint:payment_failed` to the provider (and watchtower), so radix stops waiting instead of the provider collecting cash on top.
+  - Tests: provider custom-item/override 403s; the four provider-WALLET tests replaced by one rejection test.
 
 - **2026-10-15** — Job-assignment push (`assignmentPushDetails`) now sends `address` via `formatDisplayAddress` (houseNo + the full map-resolved `addressLineOne` when present, else assembled parts incl. pincode) plus `latitude`/`longitude`. Radix's NewJobPopup and native floating card open Maps at that pin instead of text-searching the address.
 
