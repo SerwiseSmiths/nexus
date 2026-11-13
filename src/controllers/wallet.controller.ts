@@ -6,21 +6,29 @@ import { RealtimeService } from '@/services/realtime.service';
 import { WalletService } from '@/services/wallet.service';
 import type { AuthRequest } from '@/middlewares/auth.middleware';
 
+// Rupees with at most 2 decimals (whole paise) and a sane upper bound.
+const rupeeAmount = z
+  .number({ error: 'Amount must be a number' })
+  .positive('Amount must be positive')
+  .max(1_00_000, 'Amount cannot exceed ₹1,00,000')
+  .refine((n) => Math.abs(n * 100 - Math.round(n * 100)) < 1e-6, 'Amount can have at most 2 decimal places');
+
 const sendMoneySchema = z.object({
   recipientPhone: z.string().min(10, 'Invalid phone number'),
-  amount:         z.number({ error: 'Amount must be a number' }).positive('Amount must be positive'),
+  amount:         rupeeAmount,
 });
 
 const creditDebitSchema = z.object({
-  userId:  z.string().uuid('Invalid userId'),
-  amount:  z.number({ error: 'Amount must be a number' }).positive('Amount must be positive'),
-  source:  z.nativeEnum(WalletLedgerSource, { error: 'Invalid source' }),
-  refId:   z.string().optional(),
-  meta:    z.record(z.string(), z.unknown()).optional(),
+  userId:         z.string().uuid('Invalid userId'),
+  amount:         rupeeAmount,
+  source:         z.nativeEnum(WalletLedgerSource, { error: 'Invalid source' }),
+  refId:          z.string().optional(),
+  meta:           z.record(z.string(), z.unknown()).optional(),
+  idempotencyKey: z.string().min(8).max(100).optional(),
 });
 
 const createPayoutRequestSchema = z.object({
-  amount: z.number({ error: 'Amount must be a number' }).positive('Amount must be positive'),
+  amount: rupeeAmount,
 });
 
 const updatePayoutRequestSchema = z.object({

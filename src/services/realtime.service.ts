@@ -1,6 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
 import { getSupabaseConfig } from '@/configs/supabase.config';
-import { sleep } from '@/utils/sleep';
 
 // ---------------------------------------------------------------------------
 // RealtimeService
@@ -369,6 +368,19 @@ export class RealtimeService {
     ]);
   }
 
+  // The customer paid the provider's UPI QR but the payment couldn't be
+  // applied to the job (already settled, amount short, ...). Tells radix to
+  // stop waiting on the collection screen instead of collecting again.
+  static async emitPaymentFailed(complaint: BroadcastPayload, reason: string): Promise<void> {
+    const payload = { complaint, reason };
+    await Promise.allSettled([
+      complaint.providerId
+        ? this.deliverToProvider(complaint.providerId as string, 'complaint:payment_failed', payload)
+        : Promise.resolve(),
+      this.emitToAdmin('complaint:payment_failed', payload),
+    ]);
+  }
+
   // Deliberately not mirrored to watchtower — the payload carries the
   // customer's entry-QR token, and there's no admin-side state to refresh.
   static async emitQrScanRequested(
@@ -390,11 +402,11 @@ export class RealtimeService {
     // Watchtower isn't racing a screen navigation — tell it right away.
     void this.emitToAdmin('payment:verified', { ...payload, target: { role: 'CUSTOMER', id: userId } });
 
-    // Wait 10 s before broadcasting — gives the client time to navigate to
-    // PaymentVerificationScreen and join the Supabase channel.
-    console.log(`[Realtime] payment:verified queued — userId=${userId}`);
-    await sleep(7_000);
-
+    // No delay before broadcasting: this runs inside the Razorpay webhook
+    // request, and a slow response makes Razorpay mark the delivery failed
+    // (and eventually disable the webhook). The serwise app joins the user
+    // channel at login and also polls GET /payments/razorpay/order/:orderId,
+    // so an event that lands before PaymentVerificationScreen mounts isn't lost.
     console.log(`[Realtime] broadcasting payment:verified — channel=user:${userId}`, { payload });
     try {
       await this.broadcast(`user:${userId}`, 'payment:verified', payload);

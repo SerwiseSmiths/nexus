@@ -25,8 +25,10 @@ export class ConfigLoader {
     const nodeEnv = (process.env.NODE_ENV || 'local') as ConfigSource;
     this.activeEnv = nodeEnv;
 
-    // 3. Load stage-specific .env file
-    const envFile = `.env.${nodeEnv}`;
+    // 3. Load stage-specific .env file. CONFIG_ENV_FILE swaps in a different
+    // file (e.g. `.env.e2e` for the end-to-end suite's isolated DB) — needed
+    // because this file's values override anything exported in the shell.
+    const envFile = process.env.CONFIG_ENV_FILE || `.env.${nodeEnv}`;
     const envPath = path.resolve(process.cwd(), envFile);
     if (fs.existsSync(envPath)) {
       const specificEnv = dotenv.parse(fs.readFileSync(envPath));

@@ -7,6 +7,7 @@ import prisma from '@/services/prisma.service';
 import { ApiError } from '@/utils/apiResponse';
 import { logger } from '@/utils/logger';
 import { describeZodError } from '@/utils/zodError';
+import { withSerializableRetry } from '@/utils/serializableRetry';
 import { RealtimeService } from '@/services/realtime.service';
 import { NotificationService } from '@/services/notification.service';
 import { TelegramService } from '@/services/telegram.service';
@@ -1067,6 +1068,19 @@ export class ComplaintService {
     // pricing override if one exists, else the part's own base labour
     // (`provider_cut`). A custom item (no partId) has no CMS-defined split,
     // so the caller must supply both price and labour explicitly.
+    //
+    // Both escape hatches (priceOverridden, custom items) set the price — and
+    // a custom item also sets the provider's own labour cut — so they're
+    // admin-only. A provider can only quote catalogue parts at CMS prices.
+    if (!asAdmin) {
+      if (items.some((item) => !item.partId)) {
+        throw new ApiError(403, 'Only an admin can add a custom (non-catalogue) item to a quote');
+      }
+      if (items.some((item) => item.priceOverridden)) {
+        throw new ApiError(403, 'Only an admin can override a catalogue price');
+      }
+    }
+
     const snapshotItems = await Promise.all(
       items.map(async (item) => {
         if (!item.partId) {
@@ -1080,18 +1094,26 @@ export class ComplaintService {
         }
 
         const part = await StrapiService.fetchPartByDocumentId(item.partId);
+        // Fail closed: if the CMS can't load the part, never fall back to the
+        // client's unitPrice — nor, for a price override, to ₹0 provider
+        // labour (the override sets the sale price, not what the work is worth).
+        if (!part) throw new ApiError(502, `Couldn't load the current price for "${item.name}" — please try again`);
         const labour = await ComplaintService.resolveTierAwareLabour(
           item.partId,
           providerTierId,
-          part?.provider_cut ?? 0,
+          part.provider_cut ?? 0,
         );
 
-        if (item.priceOverridden || !part) return { ...item, labour };
+        if (item.priceOverridden) return { ...item, labour };
         return { ...item, name: part.name, unitPrice: part.face_value, labour };
       }),
     );
 
-    const totalAmount = snapshotItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+    // Rounded to whole paise — a float sum of paise-exact prices can still
+    // drift (0.1 + 0.2), and this total is what the customer is charged.
+    const totalAmount = Math.round(
+      snapshotItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0) * 100,
+    ) / 100;
 
     let quote;
     if (isRevision) {
@@ -1992,7 +2014,11 @@ export class ComplaintService {
     const paymentProvider =
       method === 'CASH' || method === 'ADMIN_CASH' ? PaymentProvider.CASH : PaymentProvider.RAZORPAY;
 
-    const updated = await prisma.$transaction(
+    // Retried on a serialization conflict: a concurrent write to the same
+    // complaint/wallet rows (another settlement, a quote edit) must not turn
+    // a paid QR into a FAILED order. A retry that loses the claim below gets
+    // the normal "already been paid" 409.
+    const updated = await withSerializableRetry(() => prisma.$transaction(
       async (tx) => {
         // Claim the PAYMENT → COMPLETED transition atomically. The caller's
         // stage check ran outside this transaction, and a job can now be
@@ -2061,7 +2087,7 @@ export class ComplaintService {
       // concurrently and having both balance checks pass against the same
       // pre-debit balance (the classic concurrent-overdraft race).
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
+    ), 'Complaint settlement');
 
     const deviceLinks = await prisma.complaintDevice.findMany({ where: { complaintId }, select: { deviceId: true } });
     await ComplaintService.recordServiceCompletionHistory(deviceLinks.map((l) => l.deviceId), complaint.quote?.items);

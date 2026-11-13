@@ -270,4 +270,35 @@ export class TelegramService {
 
     await TelegramService.send(html);
   }
+
+  // A Razorpay order payment (subscription / recharge / service-visit fee)
+  // was captured but nexus couldn't fulfil it — the customer has paid and got
+  // nothing, so this must be applied by hand or refunded.
+  static async notifyUnappliedPayment(params: {
+    userId: string;
+    razorpayOrderId: string;
+    razorpayPaymentId: string;
+    purpose: string;
+    amountRupees: number;
+    reason: string;
+  }): Promise<void> {
+    const user = await prisma.user.findUnique({
+      where: { id: params.userId },
+      select: { firstName: true, lastName: true, phoneNo: true },
+    });
+
+    const html =
+      `🚨 <b>Payment Captured — Not Fulfilled</b>\n` +
+      `${'─'.repeat(28)}\n` +
+      userLines(user, params.userId) +
+      line('🎯', 'Purpose', params.purpose) +
+      line('💵', 'Amount Paid', `₹${params.amountRupees}`) +
+      line('🔑', 'Razorpay ID', params.razorpayPaymentId) +
+      line('🧾', 'Order ID', params.razorpayOrderId) +
+      line('⚠️', 'Reason', params.reason) +
+      line('📅', 'Received', fmt(new Date())) +
+      `\nThe customer was charged but nothing was delivered — fulfil manually or refund in the Razorpay dashboard.\n`;
+
+    await TelegramService.send(html);
+  }
 }

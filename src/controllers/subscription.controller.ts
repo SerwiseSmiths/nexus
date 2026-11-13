@@ -1,8 +1,7 @@
 import { Response, NextFunction } from 'express';
-import { ApiError, ApiResponse } from '@/utils/apiResponse';
+import { ApiResponse } from '@/utils/apiResponse';
 import { SubscriptionService } from '@/services/subscription.service';
 import { StrapiService } from '@/services/strapi.service';
-import { PurchaseSubscriptionSchema } from '@/types/subscription.types';
 import type { AuthRequest } from '@/middlewares/auth.middleware';
 
 export class SubscriptionController {
@@ -22,24 +21,6 @@ export class SubscriptionController {
       const deviceTypeKey = req.query.deviceType as string | undefined;
       const addons = await StrapiService.fetchSubscriptionAddons(deviceTypeKey);
       ApiResponse.success(res, 200, 'Addons fetched successfully', addons);
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  // ─── Purchase ────────────────────────────────────────────────────────────────
-
-  static async purchase(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const parsed = PurchaseSubscriptionSchema.safeParse(req.body);
-      if (!parsed.success) throw new ApiError(400, 'Validation failed', parsed.error.issues);
-
-      const subscription = await SubscriptionService.purchase({
-        userId: req.user!.id,
-        ...parsed.data,
-      });
-
-      ApiResponse.success(res, 201, 'Subscription purchased successfully', { subscription });
     } catch (error) {
       next(error);
     }

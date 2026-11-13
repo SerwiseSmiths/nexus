@@ -1,67 +1,91 @@
 import crypto from 'crypto';
 import axios from 'axios';
-import { PaymentOrderStatus, PaymentSessionStatus, WalletLedgerSource, PaymentProvider, NotificationType } from '@prisma/client';
+import { PaymentOrderStatus, SubscriptionStatus, WalletLedgerSource, PaymentProvider, NotificationType } from '@prisma/client';
 import { config } from '@/configs';
 import { ApiError } from '@/utils/apiResponse';
 import { logger } from '@/utils/logger';
 import prisma from '@/services/prisma.service';
 import { SubscriptionService } from '@/services/subscription.service';
+import { StrapiService } from '@/services/strapi.service';
 import { WalletService } from '@/services/wallet.service';
 import { RealtimeService } from '@/services/realtime.service';
 import { ComplaintService, COMPLAINT_QR_PURPOSE } from '@/services/complaint.service';
 import { NotificationService } from '@/services/notification.service';
 import { TelegramService } from '@/services/telegram.service';
+import { RazorpayQrService } from '@/services/razorpay-qr.service';
+import { DeviceTypeGroupService } from '@/services/device-type-group.service';
+import { DEVICE_KEY_TO_TYPE, type DeviceKey } from '@/types/device.types';
+import { waitUntil } from '@vercel/functions';
+import {
+  ComplaintPaymentMetaSchema,
+  SubscriptionOrderMetaSchema,
+  PAYMENT_PURPOSES,
+} from '@/types/payment.types';
 import type {
   CreateRazorpayOrderInput,
-  CreatePaymentLinkInput,
-  CreatePaymentLinkResult,
-  CreatePaymentSessionInput,
-  CreatePaymentSessionResult,
+  PaymentOrderStatusResult,
+  PaymentPurpose,
   RazorpayOrderResult,
+  RazorpayPaymentEntity,
   RazorpayWebhookPayload,
   SubscriptionPaymentMeta,
-  WebviewCompleteInput,
-  WebviewCompleteResult,
 } from '@/types/payment.types';
 
+// Online (UPI) service-visit fee. Must match serwise's UPI_PRICE in
+// ServiceTicketModal — the client shows it, the server is what charges it.
+const COMPLAINT_VISIT_FEE_PAISE = 185_00;
+
+// How long a website booking-fee QR stays payable.
+const BOOKING_QR_TTL_MINUTES = 15;
+
+export type BookingQrResult = {
+  orderId:      string;        // QR id — poll GET /payments/razorpay/order/:orderId
+  amount:       number;        // paise
+  imageUrl:     string;        // Razorpay's hosted QR poster
+  imageContent: string | null; // raw upi://pay string, when available
+  expiresAt:    string;        // ISO
+};
+
+// Wallet recharge limits, in paise — whole rupees only.
+const RECHARGE_MIN_PAISE = 1_00;
+const RECHARGE_MAX_PAISE = 1_00_000_00;
+
+// Notifications after a payment is applied or refused (realtime, push,
+// Telegram) must never hold up the webhook: Razorpay needs a 2xx within 5 s
+// (and disables the webhook after 24 h of failures), and the order is only
+// marked CAPTURED once fulfilment returns. A realtime broadcast timing out
+// took webhooks to 8–10 s. waitUntil keeps the Vercel invocation alive until
+// these settle; outside Vercel it's a plain background promise.
+function inBackground(label: string, fn: () => Promise<unknown>): void {
+  waitUntil(
+    Promise.resolve()
+      .then(fn)
+      .catch((err) => logger.error(`[Payment] ${label} failed`, { error: err })),
+  );
+}
+
+type FulfilableOrder = {
+  id:              string;
+  userId:          string;
+  razorpayOrderId: string;
+  amount:          number;
+  meta:            unknown;
+};
+
 export class PaymentService {
-  // ─── Create Payment Session (no API keys required) ─────────────────────────
-  // Must be called before opening the WebView. The webhook handler matches
-  // the incoming payment to this session via phone number + amount.
-
-  static async createPaymentSession(
-    input: CreatePaymentSessionInput,
-  ): Promise<CreatePaymentSessionResult> {
-    const { userId, phone, purpose, amountRupees, meta } = input;
-    const expectedAmountPaise = Math.round(amountRupees * 100);
-
-    const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30-min window
-
-    const session = await prisma.paymentSession.create({
-      data: {
-        userId,
-        phone: phone.replace(/\s+/g, ''), // normalise whitespace
-        purpose,
-        expectedAmountPaise,
-        meta: (meta ?? {}) as object,
-        status:    PaymentSessionStatus.PENDING,
-        expiresAt,
-      },
-    });
-
-    logger.info('[Payment] Session created', { sessionId: session.id, userId, purpose });
-    return { sessionId: session.id };
-  }
-
   // ─── Create Razorpay order + persist PaymentOrder record ──────────────────
 
   static async createRazorpayOrder(
     input: CreateRazorpayOrderInput,
   ): Promise<RazorpayOrderResult> {
-    const { amount, userId, purpose, meta } = input;
+    const { userId, purpose } = input;
     const keyId     = config.razorpay?.keyId;
     const keySecret = config.razorpay?.keySecret;
     if (!keyId || !keySecret) throw new ApiError(503, 'Razorpay is not configured');
+
+    // Price and meta are resolved server-side — everything that could make
+    // fulfilment fail after the customer has paid is checked here instead.
+    const { amount, meta } = await PaymentService.resolveOrder(input);
 
     let razorpayOrderId: string;
     let orderAmount:     number;
@@ -91,131 +115,167 @@ export class PaymentService {
         razorpayOrderId,
         amount,
         purpose,
-        meta: (meta ?? {}) as object,
+        meta: meta as object,
         status: PaymentOrderStatus.PENDING,
       },
     });
 
-    logger.info('[Payment] Razorpay order created', { razorpayOrderId, userId, purpose });
+    logger.info('[Payment] Razorpay order created', { razorpayOrderId, userId, purpose, amount });
 
     return { orderId: razorpayOrderId, amount: orderAmount, currency, keyId };
   }
 
-  // ─── Create Razorpay Payment Link (WebView — real Razorpay URL, no JS injection) ──
+  // Works out what this purpose actually costs and the meta to store with the
+  // order. The client's amount is only accepted when it equals the server
+  // price — a mismatch means the app showed a stale price (409, so the user
+  // sees the new one before paying) or a tampered request.
+  private static async resolveOrder(
+    input: CreateRazorpayOrderInput,
+  ): Promise<{ amount: number; meta: Record<string, unknown> }> {
+    const { userId, purpose, amount } = input;
 
-  static async createPaymentLink(input: CreatePaymentLinkInput): Promise<CreatePaymentLinkResult> {
-    const { amountRupees, userId, description, userName, userPhone, userEmail } = input;
-    const keyId     = config.razorpay?.keyId;
-    const keySecret = config.razorpay?.keySecret;
-    if (!keyId || !keySecret) throw new ApiError(503, 'Razorpay is not configured');
-
-    const amountPaise = Math.round(amountRupees * 100);
-    // Callback URL the WebView detects to know payment is done
-    const callbackUrl = `${config.appUrl ?? 'https://nexus.dev.serwise.co.in'}/api/payments/razorpay/link-callback`;
-
-    try {
-      const response = await axios.post(
-        'https://api.razorpay.com/v1/payment_links',
-        {
-          amount:          amountPaise,
-          currency:        'INR',
-          description:     description ?? 'Serwise Payment',
-          callback_url:    callbackUrl,
-          callback_method: 'get',
-          expire_by:       Math.floor(Date.now() / 1000) + 1800, // 30-min expiry
-          ...(userName || userPhone || userEmail
-            ? { customer: { name: userName, contact: userPhone, email: userEmail } }
-            : {}),
-        },
-        { auth: { username: keyId, password: keySecret } },
-      );
-
-      const linkId: string = response.data.id;
-      const url:    string = response.data.short_url;
-
-      logger.info('[Payment] Payment link created', { linkId, userId, amountRupees });
-      return { url, linkId };
-    } catch (err: unknown) {
-      const axiosErr = err as { response?: { data?: { error?: { description?: string } } } };
-      throw new ApiError(502, axiosErr?.response?.data?.error?.description ?? 'Failed to create payment link');
+    if (purpose === 'recharge') {
+      if (amount % 100 !== 0) throw new ApiError(400, 'Recharge amount must be in whole rupees');
+      if (amount < RECHARGE_MIN_PAISE || amount > RECHARGE_MAX_PAISE) {
+        throw new ApiError(
+          400,
+          `Recharge amount must be between ₹${RECHARGE_MIN_PAISE / 100} and ₹${RECHARGE_MAX_PAISE / 100}`,
+        );
+      }
+      // creditWallet refuses an inactive wallet — refuse before payment, not after.
+      await WalletService.assertWalletCanReceive(userId);
+      return { amount, meta: {} };
     }
+
+    if (purpose === 'subscription') {
+      const parsed = SubscriptionOrderMetaSchema.safeParse(input.meta ?? {});
+      if (!parsed.success) throw new ApiError(400, 'Invalid subscription details', parsed.error.issues);
+      const { deviceTypeKey, planKey, billingCycle, startDate } = parsed.data;
+
+      const existing = await prisma.subscription.findFirst({
+        where: { userId, deviceTypeKey, status: SubscriptionStatus.ACTIVE, isDeleted: false },
+        select: { id: true },
+      });
+      if (existing) throw new ApiError(409, 'You already have an active plan for this device type');
+
+      const plans = await StrapiService.fetchSubscriptionPlans();
+      const plan = plans.find((p) => p.key === planKey);
+      if (!plan) throw new ApiError(404, `Subscription plan '${planKey}' not found`);
+      const planPrice = billingCycle === 'ANNUAL' ? plan.annual_price : plan.monthly_price;
+
+      const cmsAddons = await StrapiService.fetchSubscriptionAddons(deviceTypeKey);
+      const addonKeys = [...new Set(parsed.data.addons.map((a) => a.key))];
+      const addons: SubscriptionPaymentMeta['addons'] = addonKeys.map((key) => {
+        const addon = cmsAddons.find((a) => a.key === key);
+        if (!addon) throw new ApiError(409, 'An add-on you selected is no longer available — please review your plan');
+        return { key: addon.key, name: addon.name, price: addon.price };
+      });
+
+      const totalRupees  = planPrice + addons.reduce((sum, a) => sum + a.price, 0);
+      const expectedPaise = Math.round(totalRupees * 100);
+      if (amount !== expectedPaise) {
+        logger.warn('[Payment] Subscription amount mismatch', { userId, planKey, amount, expectedPaise });
+        throw new ApiError(409, `The price for this plan is now ₹${totalRupees} — please review and try again`);
+      }
+
+      const meta: SubscriptionPaymentMeta = { deviceTypeKey, planKey, billingCycle, addons, startDate };
+      return { amount: expectedPaise, meta };
+    }
+
+    // complaint_payment — the online service-visit fee
+    const parsed = ComplaintPaymentMetaSchema.safeParse(input.meta ?? {});
+    if (!parsed.success) throw new ApiError(400, 'Invalid booking details', parsed.error.issues);
+
+    const address = await prisma.address.findFirst({
+      where: { id: parsed.data.addressId, userId, isDeleted: false },
+      select: { id: true },
+    });
+    if (!address) throw new ApiError(400, 'Please choose a valid address');
+
+    // Same device resolution ComplaintService.createComplaint does at
+    // fulfilment — an unknown appliance (or one no service group covers) must
+    // be refused now, not after the customer has paid.
+    for (const { deviceKey } of parsed.data.requestedDevices) {
+      const deviceType = DEVICE_KEY_TO_TYPE[deviceKey as DeviceKey];
+      if (!deviceType) throw new ApiError(400, `Unknown device key: ${deviceKey}`);
+      try {
+        await DeviceTypeGroupService.findByDeviceType(deviceType);
+      } catch (err) {
+        logger.error('[Payment] No device type group for booking', { deviceKey, error: err });
+        throw new ApiError(503, 'Booking for this appliance is temporarily unavailable — please try again later');
+      }
+    }
+
+    if (amount !== COMPLAINT_VISIT_FEE_PAISE) {
+      logger.warn('[Payment] Visit fee amount mismatch', { userId, amount });
+      throw new ApiError(409, `The visit fee is ₹${COMPLAINT_VISIT_FEE_PAISE / 100} — please update the app and try again`);
+    }
+    return { amount: COMPLAINT_VISIT_FEE_PAISE, meta: parsed.data };
   }
 
-  // ─── WebView (link-based) completion — no API keys required ──────────────
-  // Processes payments made via razorpay.me/@username payment links.
-  // Idempotency: same paymentId can only be fulfilled once.
+  // ─── Booking-fee UPI QR (website "Scan to pay") ───────────────────────────
+  // Same price + meta checks as a complaint_payment order, but collected with a
+  // single-use fixed-amount UPI QR instead of Razorpay Checkout. Stored as a
+  // complaint_payment PaymentOrder keyed by the QR id, so the client polls
+  // GET /payments/razorpay/order/:qrId and qr_code.credited fulfils it exactly
+  // like an app booking (tickets are only created once the money arrives).
 
-  static async webviewComplete(input: WebviewCompleteInput): Promise<WebviewCompleteResult> {
-    const { userId, paymentId, purpose, amountRupees, meta } = input;
+  static async createBookingQr(input: {
+    userId: string;
+    amount: number;
+    meta?:  Record<string, unknown>;
+  }): Promise<BookingQrResult> {
+    const { amount, meta } = await PaymentService.resolveOrder({ ...input, purpose: 'complaint_payment' });
 
-    // Prevent double-processing the same Razorpay payment
-    const existing = await prisma.paymentOrder.findFirst({
-      where: { razorpayOrderId: paymentId, status: PaymentOrderStatus.CAPTURED, isDeleted: false },
+    const qr = await RazorpayQrService.createFixedAmountQr({
+      amountPaise: amount,
+      description: 'Service Visit Fee',
+      closeBy:     Math.floor(Date.now() / 1000) + BOOKING_QR_TTL_MINUTES * 60,
+      notes:       { userId: input.userId, purpose: 'complaint_payment' },
     });
-    if (existing) throw new ApiError(409, 'This payment has already been processed');
 
-    // Store an audit record — razorpayOrderId holds the payment_id (no order in link flow)
     await prisma.paymentOrder.create({
       data: {
-        userId,
-        razorpayOrderId:   paymentId,
-        razorpayPaymentId: paymentId,
-        amount:  Math.round(amountRupees * 100),
-        status:  PaymentOrderStatus.CAPTURED,
-        purpose,
-        meta: (meta ?? {}) as object,
+        userId:          input.userId,
+        razorpayOrderId: qr.id,
+        amount,
+        purpose:         'complaint_payment',
+        meta:            meta as object,
+        status:          PaymentOrderStatus.PENDING,
       },
     });
 
-    const result: WebviewCompleteResult = { purpose };
+    logger.info('[Payment] Booking QR created', { qrId: qr.id, userId: input.userId, amount });
 
-    if (purpose === 'subscription') {
-      const m = meta as SubscriptionPaymentMeta;
-      const subscription = await SubscriptionService.purchase({
-        userId,
-        deviceTypeKey: m.deviceTypeKey,
-        planKey:       m.planKey,
-        billingCycle:  m.billingCycle,
-        addons:        m.addons,
-        startDate:     m.startDate,
-      });
-      await WalletService.creditWallet({
-        userId,
-        amount:          amountRupees,
-        source:          WalletLedgerSource.ORDER_PAYMENT,
-        refId:           subscription.id,
-        paymentProvider: PaymentProvider.RAZORPAY,
-        updateBalance:   false, // audit-only — paid via Razorpay link, not wallet
-        meta:            { razorpayPaymentId: paymentId, subscriptionId: subscription.id },
-      });
-      result.subscriptionId = subscription.id;
+    return {
+      orderId:      qr.id,
+      amount,
+      imageUrl:     qr.imageUrl,
+      imageContent: qr.imageContent,
+      expiresAt:    new Date(qr.closeBy * 1000).toISOString(),
+    };
+  }
 
-    } else if (purpose === 'recharge') {
-      const { wallet } = await WalletService.creditWallet({
-        userId,
-        amount:          amountRupees,
-        source:          WalletLedgerSource.RECHARGE,
-        paymentProvider: PaymentProvider.RAZORPAY,
-        updateBalance:   true, // wallet balance actually increases
-        meta:            { razorpayPaymentId: paymentId },
-      });
-      result.walletBalance = wallet.balance;
+  // ─── Order status (app polls this while verifying) ────────────────────────
 
-    } else if (purpose === 'complaint_payment') {
-      const complaintId = (meta as { complaintId?: string })?.complaintId;
-      await WalletService.debitWallet({
+  static async getOrderStatus(userId: string, orderId: string): Promise<PaymentOrderStatusResult> {
+    const order = await prisma.paymentOrder.findFirst({
+      where: {
+        razorpayOrderId: orderId,
         userId,
-        amount:          amountRupees,
-        source:          WalletLedgerSource.ORDER_PAYMENT,
-        refId:           complaintId,
-        paymentProvider: PaymentProvider.RAZORPAY,
-        updateBalance:   false,
-        meta:            { razorpayPaymentId: paymentId, complaintId },
-      });
-    }
+        isDeleted: false,
+        purpose: { in: [...PAYMENT_PURPOSES] },
+      },
+      select: { razorpayOrderId: true, purpose: true, status: true, amount: true },
+    });
+    if (!order) throw new ApiError(404, 'Payment order not found');
 
-    logger.info('[Payment] WebView payment completed', { userId, paymentId, purpose, amountRupees });
-    return result;
+    return {
+      orderId: order.razorpayOrderId,
+      purpose: order.purpose,
+      status:  order.status,
+      amount:  order.amount,
+    };
   }
 
   // ─── Webhook: verify signature ────────────────────────────────────────────
@@ -224,11 +284,19 @@ export class PaymentService {
     const secret = config.razorpay?.webhookSecret;
     if (!secret) throw new ApiError(503, 'Webhook secret not configured');
 
-    const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+    const expected = Buffer.from(crypto.createHmac('sha256', secret).update(rawBody).digest('hex'));
+    const received = Buffer.from(signature);
+    // timingSafeEqual throws on a length mismatch — a malformed signature is
+    // just an invalid one, not a server error.
+    return expected.length === received.length && crypto.timingSafeEqual(expected, received);
   }
 
   // ─── Webhook: process event ───────────────────────────────────────────────
+  // Only throws on a bad signature. Every order is claimed (PENDING →
+  // PROCESSING) before it's fulfilled, so a Razorpay retry could never apply
+  // a payment that failed half-way — and repeated 5xx responses make Razorpay
+  // disable the whole webhook. A captured payment that can't be applied is
+  // marked FAILED and escalated on Telegram instead.
 
   static async handleWebhookEvent(rawBody: Buffer, signature: string): Promise<void> {
     if (!PaymentService.verifyWebhookSignature(rawBody, signature)) {
@@ -245,127 +313,199 @@ export class PaymentService {
       return;
     }
 
-    // Handle both authorized (manual capture) and auto-captured payments
-    if (event.event === 'payment.captured' || event.event === 'payment.authorized') {
-      const payment = event.payload.payment?.entity;
-      if (!payment) return;
-
-      const { id: razorpayPaymentId, order_id: razorpayOrderId, amount, contact } = payment;
-
-      logger.info('[Webhook] Payment event received', { razorpayPaymentId, razorpayOrderId, amount, contact });
-
-      // ── Path A: order-based payment (API keys were used) ─────────────────────
-      if (razorpayOrderId) {
-        // Atomically claim the order by transitioning PENDING→PROCESSING.
-        // If count===0, another webhook already claimed it — safe to ignore.
-        const claimed = await prisma.paymentOrder.updateMany({
-          where: { razorpayOrderId, status: PaymentOrderStatus.PENDING, isDeleted: false },
-          data:  { status: PaymentOrderStatus.PROCESSING },
-        });
-
-        if (claimed.count === 0) {
-          logger.info('[Webhook] PaymentOrder already claimed or not found, skipping', { razorpayOrderId });
-          return;
-        }
-
-        const paymentOrder = await prisma.paymentOrder.findFirst({
-          where: { razorpayOrderId, isDeleted: false },
-        });
-
-        if (!paymentOrder) return; // should never happen after successful updateMany
-
-        try {
-          if (paymentOrder.purpose === 'subscription') {
-            await PaymentService.fulfillSubscription(paymentOrder, razorpayPaymentId);
-          } else if (paymentOrder.purpose === 'recharge') {
-            await PaymentService.fulfillRecharge(paymentOrder, razorpayPaymentId);
-          } else if (paymentOrder.purpose === 'complaint_payment') {
-            await PaymentService.fulfillComplaintPayment(paymentOrder, razorpayPaymentId);
-          }
-          await prisma.paymentOrder.update({
-            where: { id: paymentOrder.id },
-            data:  { status: PaymentOrderStatus.CAPTURED, razorpayPaymentId },
-          });
-        } catch (err) {
-          await prisma.paymentOrder.update({
-            where: { id: paymentOrder.id },
-            data:  { status: PaymentOrderStatus.FAILED },
-          });
-          throw err;
-        }
-        return;
-      }
-
-      // ── Path B: payment-link WebView (no order ID) ────────────────────────────
-      // Match by phone number + amount against a pending PaymentSession.
-      if (!contact) {
-        logger.warn('[Webhook] No contact in payment payload, cannot match session');
-        return;
-      }
-
-      const normalizedPhone = contact.replace(/\s+/g, '');
-
-      const session = await prisma.paymentSession.findFirst({
-        where: {
-          phone:               normalizedPhone,
-          expectedAmountPaise: amount,
-          status:              PaymentSessionStatus.PENDING,
-          isDeleted:           false,
-          expiresAt:           { gt: new Date() },
-        },
-        orderBy: { createdAt: 'desc' }, // most recent session wins
-      });
-
-      if (!session) {
-        logger.warn('[Webhook] No matching PaymentSession', { phone: normalizedPhone, amount });
-        return;
-      }
-
-      logger.info('[Webhook] Session matched, fulfilling', {
-        sessionId: session.id,
-        userId:    session.userId,
-        purpose:   session.purpose,
-      });
-
-      try {
-        const orderProxy = {
-          id:     session.id,
-          userId: session.userId,
-          amount: session.expectedAmountPaise,
-          meta:   session.meta,
-        };
-
-        if (session.purpose === 'subscription') {
-          await PaymentService.fulfillSubscription(orderProxy, razorpayPaymentId);
-        } else if (session.purpose === 'recharge') {
-          await PaymentService.fulfillRecharge(orderProxy, razorpayPaymentId);
-        } else if (session.purpose === 'complaint_payment') {
-          await PaymentService.fulfillComplaintPayment(orderProxy, razorpayPaymentId);
-        }
-
-        await prisma.paymentSession.update({
-          where: { id: session.id },
-          data:  { status: PaymentSessionStatus.FULFILLED },
-        });
-      } catch (err) {
-        logger.error('[Webhook] Session fulfillment failed', { error: err, sessionId: session.id });
-        throw err;
-      }
+    if (event.event === 'payment.authorized') {
+      await PaymentService.handlePaymentAuthorized(event);
+      return;
     }
+
+    if (event.event === 'payment.captured') {
+      const payment = event.payload.payment?.entity;
+      if (payment) await PaymentService.fulfilCapturedPayment(payment);
+    }
+  }
+
+  // An authorized payment is not money received — Razorpay auto-refunds it
+  // unless it's captured. Capture it here (a no-op when the account
+  // auto-captures), then fulfil only once Razorpay confirms it's captured.
+  // Fulfilment is claim-based, so the payment.captured delivery that follows
+  // is a harmless duplicate — and this still works if the dashboard only
+  // subscribes to payment.authorized.
+  private static async handlePaymentAuthorized(event: RazorpayWebhookPayload): Promise<void> {
+    const payment = event.payload.payment?.entity;
+    if (!payment?.order_id) return;
+
+    const order = await prisma.paymentOrder.findFirst({
+      where: { razorpayOrderId: payment.order_id, status: PaymentOrderStatus.PENDING, isDeleted: false },
+      select: { amount: true },
+    });
+    if (!order) return;
+    if (payment.amount !== order.amount || payment.currency !== 'INR') {
+      logger.error('[Webhook] Authorized amount does not match order, not capturing', {
+        razorpayOrderId: payment.order_id, paid: payment.amount, expected: order.amount, currency: payment.currency,
+      });
+      return;
+    }
+
+    const keyId     = config.razorpay?.keyId;
+    const keySecret = config.razorpay?.keySecret;
+    if (!keyId || !keySecret) return;
+    const auth = { username: keyId, password: keySecret };
+
+    try {
+      await axios.post(
+        `https://api.razorpay.com/v1/payments/${payment.id}/capture`,
+        { amount: payment.amount, currency: payment.currency },
+        { auth },
+      );
+      logger.info('[Webhook] Payment captured', { razorpayPaymentId: payment.id, razorpayOrderId: payment.order_id });
+    } catch (err: unknown) {
+      // Already captured (auto-capture on) is the common case and is fine.
+      const axiosErr = err as { response?: { data?: { error?: { description?: string } } } };
+      logger.warn('[Webhook] Capture call failed (may already be captured)', {
+        razorpayPaymentId: payment.id,
+        reason: axiosErr?.response?.data?.error?.description,
+      });
+    }
+
+    try {
+      const { data } = await axios.get<{ status: string }>(
+        `https://api.razorpay.com/v1/payments/${payment.id}`,
+        { auth },
+      );
+      if (data.status !== 'captured') {
+        logger.warn('[Webhook] Payment not captured yet, waiting for payment.captured', {
+          razorpayPaymentId: payment.id, status: data.status,
+        });
+        return;
+      }
+    } catch (err: unknown) {
+      logger.warn('[Webhook] Could not confirm capture, waiting for payment.captured', {
+        razorpayPaymentId: payment.id, reason: (err as Error)?.message,
+      });
+      return;
+    }
+
+    await PaymentService.fulfilCapturedPayment(payment);
+  }
+
+  private static async fulfilCapturedPayment(payment: RazorpayPaymentEntity): Promise<void> {
+    const { id: razorpayPaymentId, order_id: razorpayOrderId, amount, currency } = payment;
+    logger.info('[Webhook] Payment captured event', { razorpayPaymentId, razorpayOrderId, amount });
+
+    if (!razorpayOrderId) {
+      logger.warn('[Webhook] Captured payment has no order id — not a Serwise order, skipping', { razorpayPaymentId });
+      return;
+    }
+
+    // Atomically claim the order by transitioning PENDING→PROCESSING.
+    // If count===0, another delivery already claimed it — safe to ignore.
+    const claimed = await prisma.paymentOrder.updateMany({
+      where: { razorpayOrderId, status: PaymentOrderStatus.PENDING, isDeleted: false },
+      data:  { status: PaymentOrderStatus.PROCESSING, razorpayPaymentId },
+    });
+
+    if (claimed.count === 0) {
+      logger.info('[Webhook] PaymentOrder already claimed or not found, skipping', { razorpayOrderId });
+      return;
+    }
+
+    const paymentOrder = await prisma.paymentOrder.findFirst({
+      where: { razorpayOrderId, isDeleted: false },
+    });
+    if (!paymentOrder) return; // should never happen after successful updateMany
+
+    await PaymentService.applyClaimedOrder(paymentOrder, razorpayPaymentId, amount, currency);
+  }
+
+  // Fulfils an order already claimed (PENDING → PROCESSING) by the caller:
+  // checks the amount, runs the purpose's fulfilment, then marks it CAPTURED —
+  // or FAILED with a Telegram escalation. Never rethrows (see handleWebhookEvent).
+  private static async applyClaimedOrder(
+    paymentOrder: FulfilableOrder & { purpose: string },
+    razorpayPaymentId: string,
+    amount: number,
+    currency: string,
+  ): Promise<void> {
+    const { razorpayOrderId } = paymentOrder;
+
+    const fail = async (reason: string, error?: unknown) => {
+      logger.error('[Webhook] Captured payment not fulfilled', { razorpayOrderId, razorpayPaymentId, reason, error });
+      await prisma.paymentOrder.update({
+        where: { id: paymentOrder.id },
+        data:  { status: PaymentOrderStatus.FAILED },
+      });
+      inBackground('Unapplied-payment Telegram alert', () => TelegramService.notifyUnappliedPayment({
+        userId:          paymentOrder.userId,
+        razorpayOrderId,
+        razorpayPaymentId,
+        purpose:         paymentOrder.purpose,
+        amountRupees:    amount / 100,
+        reason,
+      }));
+    };
+
+    if (amount !== paymentOrder.amount || currency !== 'INR') {
+      await fail(`Paid ${currency} ${amount / 100}, order was INR ${paymentOrder.amount / 100}`);
+      return;
+    }
+
+    try {
+      if (paymentOrder.purpose === 'subscription') {
+        await PaymentService.fulfillSubscription(paymentOrder, razorpayPaymentId);
+      } else if (paymentOrder.purpose === 'recharge') {
+        await PaymentService.fulfillRecharge(paymentOrder, razorpayPaymentId);
+      } else if (paymentOrder.purpose === 'complaint_payment') {
+        await PaymentService.fulfillComplaintPayment(paymentOrder, razorpayPaymentId);
+      } else {
+        await fail(`Unknown purpose '${paymentOrder.purpose}'`);
+        return;
+      }
+    } catch (err) {
+      await fail(err instanceof Error ? err.message : 'Unknown error', err);
+      return;
+    }
+
+    await prisma.paymentOrder.update({
+      where: { id: paymentOrder.id },
+      data:  { status: PaymentOrderStatus.CAPTURED },
+    });
+
+    inBackground('Payment push notification', () =>
+      PaymentService.notifyFulfilled(paymentOrder.purpose as PaymentPurpose, paymentOrder.userId));
   }
 
   // ─── Webhook: complaint UPI QR paid ───────────────────────────────────────
   // PaymentOrder.razorpayOrderId holds the QR id for these (see
-  // ComplaintService.getPaymentQr). Never rethrows: the order is claimed
-  // before settling, so a Razorpay retry could never succeed anyway — and
-  // repeated 5xx responses make Razorpay disable the whole webhook. A
-  // payment that can't be applied is escalated on Telegram instead.
+  // ComplaintService.getPaymentQr). Never rethrows — see handleWebhookEvent.
 
   private static async handleQrCredited(event: RazorpayWebhookPayload): Promise<void> {
     const qr      = event.payload.qr_code?.entity;
     const payment = event.payload.payment?.entity;
     if (!qr || !payment) {
       logger.warn('[Webhook] qr_code.credited without qr_code/payment entity');
+      return;
+    }
+
+    // Booking-fee QR from the website (see createBookingQr): same fulfilment as
+    // an app order for the visit fee.
+    const bookingClaim = await prisma.paymentOrder.updateMany({
+      where: {
+        razorpayOrderId: qr.id,
+        purpose:         'complaint_payment',
+        status:          PaymentOrderStatus.PENDING,
+        isDeleted:       false,
+      },
+      data: { status: PaymentOrderStatus.PROCESSING, razorpayPaymentId: payment.id },
+    });
+    const bookingOrder = await prisma.paymentOrder.findFirst({
+      where: { razorpayOrderId: qr.id, purpose: 'complaint_payment', isDeleted: false },
+    });
+    if (bookingOrder) {
+      if (bookingClaim.count > 0) {
+        await PaymentService.applyClaimedOrder(bookingOrder, payment.id, payment.amount, payment.currency);
+      } else {
+        logger.info('[Webhook] Booking QR already claimed, skipping', { qrId: qr.id, status: bookingOrder.status });
+      }
       return;
     }
 
@@ -387,13 +527,13 @@ export class PaymentService {
       // by a cash settlement a moment before the customer paid (needs refund).
       if (order?.status === PaymentOrderStatus.FAILED) {
         logger.error('[Webhook] Payment received on a closed complaint QR', { qrId: qr.id, complaintId });
-        await TelegramService.notifyUnappliedQrPayment({
+        inBackground('Closed-QR Telegram alert', () => TelegramService.notifyUnappliedQrPayment({
           complaintId,
           qrId:              qr.id,
           razorpayPaymentId: payment.id,
           amountRupees:      payment.amount / 100,
           reason:            'QR was already closed — the complaint was settled another way',
-        });
+        }));
       } else {
         logger.info('[Webhook] QR order already claimed or unknown, skipping', { qrId: qr.id });
       }
@@ -419,12 +559,23 @@ export class PaymentService {
       });
       const reason = err instanceof Error ? err.message : 'Unknown error';
       logger.error('[Webhook] Failed to settle complaint via UPI QR', { error: err, complaintId, qrId: qr.id });
-      await TelegramService.notifyUnappliedQrPayment({
+      inBackground('Unapplied-QR Telegram alert', () => TelegramService.notifyUnappliedQrPayment({
         complaintId,
         qrId:              qr.id,
         razorpayPaymentId: payment.id,
         amountRupees:      payment.amount / 100,
         reason,
+      }));
+      // Tell radix so the provider stops waiting on the collection screen
+      // (and doesn't collect cash on top of the customer's UPI payment).
+      inBackground('payment_failed emit', async () => {
+        const complaint = await prisma.complaint.findFirst({
+          where:  { id: complaintId },
+          select: { id: true, userId: true, providerId: true, stage: true },
+        });
+        if (complaint) {
+          await RealtimeService.emitPaymentFailed(complaint as unknown as Record<string, unknown>, reason);
+        }
       });
     }
   }
@@ -432,7 +583,7 @@ export class PaymentService {
   // ─── Fulfil a subscription after payment ──────────────────────────────────
 
   private static async fulfillSubscription(
-    paymentOrder: { id: string; userId: string; amount: number; meta: unknown },
+    paymentOrder: FulfilableOrder,
     razorpayPaymentId: string,
   ): Promise<void> {
     const meta = paymentOrder.meta as SubscriptionPaymentMeta;
@@ -461,33 +612,25 @@ export class PaymentService {
       subscriptionId: subscription.id, ledgerId: ledger.id, userId: paymentOrder.userId,
     });
 
-    await Promise.allSettled([
-      RealtimeService.emitPaymentVerified(paymentOrder.userId, {
-        subscriptionId: subscription.id,
-        ledgerId:       ledger.id,
-        amount:         paymentOrder.amount / 100,
-      }),
-      NotificationService.sendToUser({
-        userId:   paymentOrder.userId,
-        title:    'Plan Activated',
-        body:     'Your service plan is now active.',
-        type:     NotificationType.PAYMENT,
-        metadata: { navigate: 'wallet' },
-      }),
-      TelegramService.notifyPaymentVerified({
-        userId:            paymentOrder.userId,
-        subscriptionId:    subscription.id,
-        amountRupees:      paymentOrder.amount / 100,
-        razorpayPaymentId,
-        ledgerId:          ledger.id,
-      }),
-    ]);
+    inBackground('payment:verified emit', () => RealtimeService.emitPaymentVerified(paymentOrder.userId, {
+      orderId:        paymentOrder.razorpayOrderId,
+      subscriptionId: subscription.id,
+      ledgerId:       ledger.id,
+      amount:         paymentOrder.amount / 100,
+    }));
+    inBackground('Subscription Telegram alert', () => TelegramService.notifyPaymentVerified({
+      userId:            paymentOrder.userId,
+      subscriptionId:    subscription.id,
+      amountRupees:      paymentOrder.amount / 100,
+      razorpayPaymentId,
+      ledgerId:          ledger.id,
+    }));
   }
 
   // ─── Fulfil a wallet recharge after payment ────────────────────────────────
 
   private static async fulfillRecharge(
-    paymentOrder: { id: string; userId: string; amount: number },
+    paymentOrder: FulfilableOrder,
     razorpayPaymentId: string,
   ): Promise<void> {
     // CREDIT wallet — this actually increases the wallet balance
@@ -497,7 +640,7 @@ export class PaymentService {
       source:          WalletLedgerSource.RECHARGE,
       paymentProvider: PaymentProvider.RAZORPAY,
       updateBalance:   true, // recharge → balance increases
-      meta:            { razorpayPaymentId },
+      meta:            { razorpayPaymentId, razorpayOrderId: paymentOrder.razorpayOrderId },
     });
 
     logger.info('[Payment] Wallet recharged', {
@@ -505,20 +648,12 @@ export class PaymentService {
       newBalance: wallet.balance, ledgerId: ledger.id,
     });
 
-    await Promise.allSettled([
-      RealtimeService.emitPaymentVerified(paymentOrder.userId, {
-        walletBalance: wallet.balance,
-        ledgerId:      ledger.id,
-        amount:        paymentOrder.amount / 100,
-      }),
-      NotificationService.sendToUser({
-        userId:   paymentOrder.userId,
-        title:    'Payment Received',
-        body:     `₹${paymentOrder.amount / 100} has been added to your wallet.`,
-        type:     NotificationType.PAYMENT,
-        metadata: { navigate: 'wallet' },
-      }),
-    ]);
+    inBackground('payment:verified emit', () => RealtimeService.emitPaymentVerified(paymentOrder.userId, {
+      orderId:       paymentOrder.razorpayOrderId,
+      walletBalance: wallet.balance,
+      ledgerId:      ledger.id,
+      amount:        paymentOrder.amount / 100,
+    }));
   }
 
   // ─── Fulfil a one-off complaint/service payment ────────────────────────────
@@ -527,7 +662,7 @@ export class PaymentService {
   // that UPI payments which interrupt the app still result in a complaint.
 
   private static async fulfillComplaintPayment(
-    paymentOrder: { id: string; userId: string; amount: number; meta: unknown },
+    paymentOrder: FulfilableOrder,
     razorpayPaymentId: string,
   ): Promise<void> {
     const meta = paymentOrder.meta as {
@@ -571,35 +706,53 @@ export class PaymentService {
     });
     const [complaint] = complaints;
 
-    // Audit-only debit entry — tracks the service fee without touching wallet balance
-    const { ledger } = await WalletService.debitWallet({
-      userId:          paymentOrder.userId,
-      amount:          paymentOrder.amount / 100,
-      source:          WalletLedgerSource.ORDER_PAYMENT,
-      refId:           complaint.id,
-      paymentProvider: PaymentProvider.RAZORPAY,
-      updateBalance:   false,
-      meta:            { razorpayPaymentId, complaintId: complaint.id, complaintIds: complaints.map(c => c.id) },
-    });
+    // The booking now exists, so the payment IS applied — from here nothing may
+    // throw (that would mark the order FAILED and ask support to refund a
+    // booking the customer has). The audit-only ledger entry creates the
+    // wallet if the customer never had one (admin-created customers) and
+    // doesn't care whether it's active — nothing is charged to it.
+    let ledgerId: string | null = null;
+    try {
+      const ledger = await prisma.$transaction((tx) => WalletService.recordCustomerComplaintPayment(
+        paymentOrder.userId,
+        paymentOrder.amount / 100,
+        complaint.id,
+        PaymentProvider.RAZORPAY,
+        { razorpayPaymentId, complaintId: complaint.id, complaintIds: complaints.map(c => c.id) },
+        tx,
+      ));
+      ledgerId = ledger?.id ?? null;
+    } catch (err) {
+      logger.error('[Payment] Booking fee audit ledger entry not written', {
+        userId: paymentOrder.userId, razorpayPaymentId, complaintId: complaint.id, error: err,
+      });
+    }
 
     logger.info('[Payment] Complaint payment fulfilled', {
-      userId: paymentOrder.userId, ledgerId: ledger.id, complaintIds: complaints.map(c => c.id),
+      userId: paymentOrder.userId, ledgerId, complaintIds: complaints.map(c => c.id),
     });
 
-    await Promise.allSettled([
-      RealtimeService.emitPaymentVerified(paymentOrder.userId, {
-        complaintId: complaint.id,
-        ledgerId:    ledger.id,
-        amount:      paymentOrder.amount / 100,
-      }),
-      NotificationService.sendToUser({
-        userId:      paymentOrder.userId,
-        title:       'Booking Confirmed',
-        body:        'Your service visit has been scheduled.',
-        type:        NotificationType.PAYMENT,
-        complaintId: complaint.id,
-        metadata:    { navigate: 'wallet' },
-      }),
-    ]);
+    inBackground('payment:verified emit', () => RealtimeService.emitPaymentVerified(paymentOrder.userId, {
+      orderId:     paymentOrder.razorpayOrderId,
+      complaintId: complaint.id,
+      ledgerId,
+      amount:      paymentOrder.amount / 100,
+    }));
+  }
+
+  // Push notification once the order is fully settled (status CAPTURED), so a
+  // user who taps it and opens the app sees the finished state.
+  private static async notifyFulfilled(purpose: PaymentPurpose, userId: string): Promise<void> {
+    const content: Record<PaymentPurpose, { title: string; body: string }> = {
+      subscription:      { title: 'Plan Activated',    body: 'Your service plan is now active.' },
+      recharge:          { title: 'Payment Received',  body: 'Money has been added to your wallet.' },
+      complaint_payment: { title: 'Booking Confirmed', body: 'Your service visit has been scheduled.' },
+    };
+    await NotificationService.sendToUser({
+      userId,
+      ...content[purpose],
+      type:     NotificationType.PAYMENT,
+      metadata: { navigate: 'wallet' },
+    }).catch((err) => logger.error('[Payment] Notification failed', { error: err }));
   }
 }

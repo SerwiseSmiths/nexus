@@ -30,20 +30,26 @@ const router = Router();
  *             properties:
  *               amount:
  *                 type: integer
- *                 description: Amount in paise (e.g. 18500 for ₹185)
+ *                 description: >
+ *                   Amount in paise (e.g. 18500 for ₹185). Must equal the server-computed
+ *                   price for the purpose; recharge must be whole rupees, ₹1–₹1,00,000.
  *                 example: 18500
  *               purpose:
  *                 type: string
- *                 description: Intent for this payment (e.g. "subscription")
+ *                 enum: [subscription, recharge, complaint_payment]
  *                 example: subscription
  *               meta:
  *                 type: object
- *                 description: Payload to store with the order for webhook fulfilment
+ *                 description: >
+ *                   subscription → { deviceTypeKey, planKey, billingCycle, addons: [{ key }], startDate };
+ *                   complaint_payment → { addressId, requestedDevices, serviceType?, deviceLines?, tags?, notes? }
  *     responses:
  *       201:
  *         description: Order created successfully
  *       400:
- *         description: Validation error
+ *         description: Validation error / recharge outside limits / invalid address
+ *       409:
+ *         description: Price changed, or an active plan already exists for this device type
  *       401:
  *         description: Unauthorized
  *       502:
@@ -55,69 +61,69 @@ router.post('/razorpay/order', authenticate, PaymentController.createRazorpayOrd
 
 /**
  * @swagger
- * /payments/razorpay/session:
- *   post:
- *     summary: Create a payment session before opening the Razorpay WebView
+ * /payments/razorpay/order/{orderId}:
+ *   get:
+ *     summary: Status of one of the current user's Razorpay orders
  *     tags: [Payment]
  *     security:
  *       - bearerAuth: []
  *     description: >
- *       No API keys required. Stores user intent (purpose + amount + meta) so the
- *       webhook handler can match the incoming payment to the right user by phone number.
+ *       Polled by the app while verifying a payment, as a fallback to the
+ *       realtime payment:verified event. PENDING = not paid yet, PROCESSING =
+ *       paid and being fulfilled, CAPTURED = fulfilled, FAILED = paid but could
+ *       not be fulfilled (support is alerted to fulfil or refund).
+ *     parameters:
+ *       - in: path
+ *         name: orderId
+ *         required: true
+ *         schema: { type: string }
+ *         description: Razorpay order id (order_xxx)
+ *     responses:
+ *       200:
+ *         description: Order status fetched
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: No such order for this user
  */
-router.post('/razorpay/session', authenticate, PaymentController.createPaymentSession);
+router.get('/razorpay/order/:orderId', authenticate, PaymentController.getOrderStatus);
 
 /**
  * @swagger
- * /payments/razorpay/webview-complete:
+ * /payments/razorpay/booking-qr:
  *   post:
- *     summary: Complete a payment made via Razorpay payment link WebView
+ *     summary: Single-use UPI QR for the service-visit fee (website "Scan to pay")
  *     tags: [Payment]
  *     security:
  *       - bearerAuth: []
  *     description: >
- *       Used when API keys are not yet available (pre-approval).
- *       Client submits the razorpay_payment_id extracted from the WebView success URL.
- *       Backend fulfils the purchase (subscription / recharge / complaint) and records the ledger entry.
+ *       Same checks as a complaint_payment order (visit fee, address ownership,
+ *       requestedDevices). The tickets are created by the qr_code.credited webhook
+ *       once paid. Poll GET /payments/razorpay/order/{orderId} with the returned
+ *       orderId (the QR id) for the status.
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             required: [paymentId, purpose, amountRupees]
+ *             required: [amount, meta]
  *             properties:
- *               paymentId:    { type: string }
- *               purpose:      { type: string, example: subscription }
- *               amountRupees: { type: number, example: 399 }
- *               meta:         { type: object }
+ *               amount: { type: integer, example: 18500, description: Visit fee in paise }
+ *               meta:
+ *                 type: object
+ *                 description: '{ addressId, requestedDevices: [{ deviceKey, quantity }], serviceType?, deviceLines?, tags?, notes? }'
  *     responses:
- *       200:
- *         description: Payment processed
+ *       201:
+ *         description: '{ orderId, amount, imageUrl, imageContent, expiresAt }'
+ *       400:
+ *         description: Invalid booking details / address
  *       409:
- *         description: Payment already processed (idempotency)
+ *         description: The visit fee changed
+ *       502:
+ *         description: Razorpay API error
  */
-router.post('/razorpay/webview-complete', authenticate, PaymentController.handleWebviewComplete);
-
-/**
- * @swagger
- * /payments/razorpay/link:
- *   post:
- *     summary: Create a Razorpay Payment Link (WebView — real Razorpay URL, amount set server-side)
- *     tags: [Payment]
- *     security:
- *       - bearerAuth: []
- */
-router.post('/razorpay/link', authenticate, PaymentController.createPaymentLink);
-
-/**
- * @swagger
- * /payments/razorpay/link-callback:
- *   get:
- *     summary: Razorpay payment link callback — WebView detects this URL for success/failure
- *     tags: [Payment]
- */
-router.get('/razorpay/link-callback', PaymentController.handleLinkCallback);
+router.post('/razorpay/booking-qr', authenticate, PaymentController.createBookingQr);
 
 /**
  * @swagger
@@ -126,8 +132,9 @@ router.get('/razorpay/link-callback', PaymentController.handleLinkCallback);
  *     summary: Razorpay webhook — verifies signature and fulfils pending payments
  *     tags: [Payment]
  *     description: >
- *       Registered in the Razorpay dashboard. Handles payment.captured and
- *       payment.authorized events. Signature verified via RAZORPAY_WEBHOOK_SECRET.
+ *       Registered in the Razorpay dashboard. Handles payment.authorized (captures it),
+ *       payment.captured (fulfils the order) and qr_code.credited. Signature verified
+ *       via RAZORPAY_WEBHOOK_SECRET.
  *     responses:
  *       200:
  *         description: Event received

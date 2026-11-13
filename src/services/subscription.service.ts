@@ -21,18 +21,8 @@ export class SubscriptionService {
   static async purchase(input: PurchaseSubscriptionInput) {
     const { userId, deviceTypeKey, planKey, billingCycle, addons, startDate } = input;
 
-    // Check for existing active subscription for this user + device type
-    const existing = await prisma.subscription.findFirst({
-      where: {
-        userId,
-        deviceTypeKey,
-        status: SubscriptionStatus.ACTIVE,
-        isDeleted: false,
-      },
-    });
-    if (existing) throw new ApiError(409, `An active subscription already exists for this device type`);
-
-    // Fetch plan from CMS to validate and snapshot pricing
+    // Fetch plan from CMS to validate and snapshot pricing (before the
+    // transaction below, so no lock is held across a network call)
     const plans = await StrapiService.fetchSubscriptionPlans();
     const plan = plans.find((p) => p.key === planKey);
     if (!plan) throw new ApiError(404, `Subscription plan '${planKey}' not found`);
@@ -64,26 +54,40 @@ export class SubscriptionService {
         };
       });
 
-    const subscription = await prisma.subscription.create({
-      data: {
-        userId,
-        deviceTypeKey,
-        planKey,
-        planName:       plan.name,
-        planBadgeColor: plan.badge_color ?? null,
-        billingCycle,
-        planPrice,
-        addons:      addons as object[],
-        totalAmount,
-        maxServices: plan.max_services,
-        startDate:   start,
-        endDate:     end,
-        status:      SubscriptionStatus.ACTIVE,
-        services: {
-          create: visitServices,
+    // Check-and-create under a per-(user, device type) advisory lock: two
+    // payments for the same device fulfilled at once (two webhooks) must not
+    // both pass the "no active plan" check — the second gets the 409 and its
+    // order is marked FAILED (refund) instead of a second paid ACTIVE plan.
+    const subscription = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`subscription:${userId}:${deviceTypeKey}`}))`;
+
+      const existing = await tx.subscription.findFirst({
+        where:  { userId, deviceTypeKey, status: SubscriptionStatus.ACTIVE, isDeleted: false },
+        select: { id: true },
+      });
+      if (existing) throw new ApiError(409, `An active subscription already exists for this device type`);
+
+      return tx.subscription.create({
+        data: {
+          userId,
+          deviceTypeKey,
+          planKey,
+          planName:       plan.name,
+          planBadgeColor: plan.badge_color ?? null,
+          billingCycle,
+          planPrice,
+          addons:      addons as object[],
+          totalAmount,
+          maxServices: plan.max_services,
+          startDate:   start,
+          endDate:     end,
+          status:      SubscriptionStatus.ACTIVE,
+          services: {
+            create: visitServices,
+          },
         },
-      },
-      include: SUBSCRIPTION_INCLUDE,
+        include: SUBSCRIPTION_INCLUDE,
+      });
     });
 
     logger.info('Subscription purchased', { subscriptionId: subscription.id, userId, deviceTypeKey, planKey });

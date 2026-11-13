@@ -2,13 +2,8 @@ import { Response, NextFunction } from 'express';
 import { AuthRequest } from '@/middlewares/auth.middleware';
 import { Request } from 'express';
 import { PaymentService } from '@/services/payment.service';
-import { ApiResponse } from '@/utils/apiResponse';
-import {
-  CreateRazorpayOrderSchema,
-  CreatePaymentLinkSchema,
-  CreatePaymentSessionSchema,
-  WebviewCompleteSchema,
-} from '@/types/payment.types';
+import { ApiError, ApiResponse } from '@/utils/apiResponse';
+import { CreateBookingQrSchema, CreateRazorpayOrderSchema } from '@/types/payment.types';
 
 export class PaymentController {
   static async createRazorpayOrder(req: AuthRequest, res: Response, next: NextFunction) {
@@ -28,60 +23,29 @@ export class PaymentController {
     }
   }
 
-  // Create a payment session before opening the WebView (no API keys needed)
-  static async createPaymentSession(req: AuthRequest, res: Response, next: NextFunction) {
+  static async createBookingQr(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const parsed = CreatePaymentSessionSchema.safeParse(req.body);
+      const parsed = CreateBookingQrSchema.safeParse(req.body);
       if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
 
-      const result = await PaymentService.createPaymentSession({
-        ...parsed.data,
+      const result = await PaymentService.createBookingQr({
         userId: req.user!.id,
-        phone:  req.user!.phoneNo,
+        amount: parsed.data.amount,
+        meta:   parsed.data.meta,
       });
-      return ApiResponse.success(res, 201, 'Payment session created', result);
+      return ApiResponse.success(res, 201, 'Booking QR created', result);
     } catch (error) {
       next(error);
     }
   }
 
-  static async createPaymentLink(req: AuthRequest, res: Response, next: NextFunction) {
+  static async getOrderStatus(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const parsed = CreatePaymentLinkSchema.safeParse(req.body);
-      if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
+      const orderId = req.params.orderId as string;
+      if (!orderId) throw new ApiError(400, 'orderId is required');
 
-      const result = await PaymentService.createPaymentLink({
-        ...parsed.data,
-        userId:    req.user!.id,
-        userPhone: req.user!.phoneNo,
-      });
-      return ApiResponse.success(res, 201, 'Payment link created', result);
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  // GET callback that Razorpay redirects to after payment link payment
-  static async handleLinkCallback(req: Request, res: Response) {
-    const status = req.query.razorpay_payment_link_status as string;
-    // Return a minimal HTML page the WebView can detect
-    const html = status === 'paid'
-      ? `<html><body><p id="status">paid</p></body></html>`
-      : `<html><body><p id="status">failed</p></body></html>`;
-    res.setHeader('Content-Type', 'text/html');
-    res.status(200).send(html);
-  }
-
-  static async handleWebviewComplete(req: AuthRequest, res: Response, next: NextFunction) {
-    try {
-      const parsed = WebviewCompleteSchema.safeParse(req.body);
-      if (!parsed.success) return ApiResponse.error(res, 400, 'Validation failed', parsed.error.issues);
-
-      const result = await PaymentService.webviewComplete({
-        ...parsed.data,
-        userId: req.user!.id,
-      });
-      return ApiResponse.success(res, 200, 'Payment completed', result);
+      const result = await PaymentService.getOrderStatus(req.user!.id, orderId);
+      return ApiResponse.success(res, 200, 'Payment order status fetched', result);
     } catch (error) {
       next(error);
     }

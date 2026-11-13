@@ -37,16 +37,21 @@ export const AssignProviderSchema = z.object({
   force: z.boolean().optional().default(false),
 });
 
+// Money is Float rupees (see PAYMENT_AUDIT_TODO D1) — anything finer than a
+// paisa would leave wallet balances off whole paise once credited.
+const wholePaise = (n: number) => Math.abs(n * 100 - Math.round(n * 100)) < 1e-6;
+
 export const AddQuoteSchema = z.object({
   items: z.array(z.object({
     partId:    z.string().optional(),       // Strapi documentId (from catalogue)
     name:      z.string().min(1, 'Item name is required'),
-    unitPrice: z.number().min(0, 'Unit price cannot be negative'),
+    unitPrice: z.number().min(0, 'Unit price cannot be negative')
+      .refine(wholePaise, 'Unit price can have at most 2 decimal places'),
     quantity:  z.number().int().min(1, 'Quantity must be at least 1').default(1),
     // For a catalogue item (partId set): overrides the CMS price with this
     // exact value instead of re-resolving it from the CMS — a manual backup
     // for when the real cost ran higher than the listed catalogue price.
-    // Ignored for a custom item (no partId), which is always admin-priced.
+    // Admin-only (403 for a provider). Custom items (no partId) are admin-only too.
     priceOverridden: z.boolean().optional(),
     // What the provider actually earns from this line item (per unit) — the
     // rest of unitPrice is the company's (parts cost + margin). Required for
@@ -54,7 +59,8 @@ export const AddQuoteSchema = z.object({
     // back on — the admin enters price and labour separately. Ignored for a
     // catalogue item, whose labour is always resolved server-side from the
     // provider's tier pricing (or the part's own default) — see addQuote.
-    labour: z.number().min(0, 'Labour cannot be negative').optional(),
+    labour: z.number().min(0, 'Labour cannot be negative')
+      .refine(wholePaise, 'Labour can have at most 2 decimal places').optional(),
   })).min(1, 'At least one item is required'),
   notes: z.string().optional(),
 });
@@ -91,8 +97,11 @@ export const ReopenComplaintSchema = z.object({
   addressId: z.string().uuid('Invalid address ID').optional(),
 });
 
+// Provider-initiated settlement is CASH only. WALLET would debit the
+// customer's Serwise wallet on the provider's say-so, with no action from the
+// customer — wallet payments must be confirmed from the serwise app instead.
 export const CompletePaymentSchema = z.object({
-  method: z.enum(['CASH', 'WALLET'], 'Please choose a payment method: CASH or WALLET'),
+  method: z.enum(['CASH'], 'Please choose a payment method: CASH'),
 });
 
 // Admin records a full-quote cash payment from watchtower. `collectedBy`:

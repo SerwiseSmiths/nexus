@@ -43,53 +43,9 @@ router.get('/plans', SubscriptionController.listPlans);
  */
 router.get('/addons', SubscriptionController.listAddons);
 
-/**
- * @swagger
- * /subscription:
- *   post:
- *     summary: Purchase a subscription for a device type (covers all devices of that type)
- *     tags: [Subscription]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - deviceTypeKey
- *               - planKey
- *               - billingCycle
- *               - startDate
- *             properties:
- *               deviceTypeKey:
- *                 type: string
- *                 example: master_purifier
- *               planKey:
- *                 type: string
- *                 example: LITE
- *               billingCycle:
- *                 type: string
- *                 enum: [ANNUAL, MONTHLY]
- *               addons:
- *                 type: array
- *                 items:
- *                   type: object
- *                   properties:
- *                     key:   { type: string }
- *                     name:  { type: string }
- *                     price: { type: number }
- *               startDate:
- *                 type: string
- *                 format: date-time
- *     responses:
- *       201:
- *         description: Subscription purchased
- *       409:
- *         description: Active subscription already exists for this device type
- */
-router.post('/', authenticate, authorize([Role.CUSTOMER]), SubscriptionController.purchase);
+// Subscriptions are only ever created by the Razorpay webhook once payment
+// is captured (PaymentService.fulfillSubscription) — there is deliberately no
+// direct purchase endpoint; it would hand out plans without payment.
 
 /**
  * @swagger

@@ -35,12 +35,13 @@ describe('Quote flow', () => {
   });
 
   describe('POST /api/complaint/:id/quote', () => {
-    it('the assigned provider submits a quote and stage moves to APPROVAL', async () => {
+    it('an admin submits a custom-item quote for the assigned provider and stage moves to APPROVAL', async () => {
       const customer = await createUser(Role.CUSTOMER);
       const provider = await createUser(Role.PROVIDER);
+      const admin = await createUser(Role.ADMIN);
       const address = await createAddressFor(customer.id);
       const complaint = await createComplaintFor(customer.id, address.id, { providerId: provider.id, stage: 'ESTIMATION' });
-      const token = signAccessToken(provider);
+      const token = signAccessToken(admin);
 
       const res = await testRequest(app)
         .post(`/api/complaint/${complaint.id}/quote`)
@@ -52,12 +53,45 @@ describe('Quote flow', () => {
       expect(res.body.data.complaint.stage).toBe('APPROVAL');
     });
 
-    it('rejects a custom (non-catalogue) item with no labour with a 400', async () => {
+    it('rejects a provider adding a custom (non-catalogue) item with 403 — a provider would be setting their own price and labour', async () => {
       const customer = await createUser(Role.CUSTOMER);
       const provider = await createUser(Role.PROVIDER);
       const address = await createAddressFor(customer.id);
       const complaint = await createComplaintFor(customer.id, address.id, { providerId: provider.id, stage: 'ESTIMATION' });
       const token = signAccessToken(provider);
+
+      const res = await testRequest(app)
+        .post(`/api/complaint/${complaint.id}/quote`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ items: [{ name: 'Compressor replacement', unitPrice: 1500, quantity: 1, labour: 1500 }] });
+
+      expect(res.status).toBe(403);
+      const quote = await prisma.quote.findUnique({ where: { complaintId: complaint.id } });
+      expect(quote).toBeNull();
+    });
+
+    it('rejects a provider overriding a catalogue price with 403', async () => {
+      const customer = await createUser(Role.CUSTOMER);
+      const provider = await createUser(Role.PROVIDER);
+      const address = await createAddressFor(customer.id);
+      const complaint = await createComplaintFor(customer.id, address.id, { providerId: provider.id, stage: 'ESTIMATION' });
+      const token = signAccessToken(provider);
+
+      const res = await testRequest(app)
+        .post(`/api/complaint/${complaint.id}/quote`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ items: [{ partId: 'any-part', name: 'Filter', unitPrice: 9999, quantity: 1, priceOverridden: true }] });
+
+      expect(res.status).toBe(403);
+    });
+
+    it('rejects a custom (non-catalogue) item with no labour with a 400', async () => {
+      const customer = await createUser(Role.CUSTOMER);
+      const provider = await createUser(Role.PROVIDER);
+      const admin = await createUser(Role.ADMIN);
+      const address = await createAddressFor(customer.id);
+      const complaint = await createComplaintFor(customer.id, address.id, { providerId: provider.id, stage: 'ESTIMATION' });
+      const token = signAccessToken(admin);
 
       const res = await testRequest(app)
         .post(`/api/complaint/${complaint.id}/quote`)
@@ -70,9 +104,10 @@ describe('Quote flow', () => {
     it('rejects a custom item whose labour exceeds its unit price with a 400', async () => {
       const customer = await createUser(Role.CUSTOMER);
       const provider = await createUser(Role.PROVIDER);
+      const admin = await createUser(Role.ADMIN);
       const address = await createAddressFor(customer.id);
       const complaint = await createComplaintFor(customer.id, address.id, { providerId: provider.id, stage: 'ESTIMATION' });
-      const token = signAccessToken(provider);
+      const token = signAccessToken(admin);
 
       const res = await testRequest(app)
         .post(`/api/complaint/${complaint.id}/quote`)
@@ -438,7 +473,7 @@ describe('Quote flow', () => {
         .send({ method: 'BITCOIN' });
 
       expect(res.status).toBe(400);
-      expect(res.body.message).toBe('method: Please choose a payment method: CASH or WALLET');
+      expect(res.body.message).toBe('method: Please choose a payment method: CASH');
     });
 
     it('CASH: completes without touching the customer wallet', async () => {
@@ -492,7 +527,7 @@ describe('Quote flow', () => {
       expect(ledger[1]).toMatchObject({ type: 'DEBIT', amount: 600 });
     });
 
-    it('WALLET: debits the customer and credits the provider when balance is sufficient (fixed 2026-09-07)', async () => {
+    it('rejects WALLET from a provider with 400 and moves no money — a provider must never debit the customer\'s wallet', async () => {
       const customer = await createUser(Role.CUSTOMER);
       const provider = await createUser(Role.PROVIDER);
       const address = await createAddressFor(customer.id);
@@ -500,64 +535,6 @@ describe('Quote flow', () => {
         providerId: provider.id, stage: 'PAYMENT', totalAmount: 300,
       });
       await prisma.wallet.create({ data: { userId: customer.id, walletType: 'CUSTOMER', balance: 1000 } });
-      const token = signAccessToken(provider);
-
-      const res = await testRequest(app)
-        .patch(`/api/complaint/${complaint.id}/complete-payment`)
-        .set('Authorization', `Bearer ${token}`)
-        .send({ method: 'WALLET' });
-
-      expect(res.status).toBe(200);
-      expect(res.body.data.complaint.stage).toBe('COMPLETED');
-
-      const customerWallet = await prisma.wallet.findUnique({ where: { userId: customer.id } });
-      expect(customerWallet?.balance).toBe(700);
-
-      const providerWallet = await prisma.wallet.findUnique({ where: { userId: provider.id } });
-      expect(providerWallet?.balance).toBe(300);
-    });
-
-    it('WALLET: with a labour-split quote, credits only labour â€” the company keeps the rest since it already collected the full amount from the customer\'s wallet (fixed 2026-09-27)', async () => {
-      const customer = await createUser(Role.CUSTOMER);
-      const provider = await createUser(Role.PROVIDER);
-      const address = await createAddressFor(customer.id);
-      const complaint = await createComplaintFor(customer.id, address.id, { providerId: provider.id, stage: 'PAYMENT' });
-      await prisma.quote.create({
-        data: {
-          complaintId: complaint.id,
-          items: [{ name: 'Compressor replacement', unitPrice: 600, quantity: 1, labour: 300 }],
-          totalAmount: 600,
-        },
-      });
-      await prisma.wallet.create({ data: { userId: customer.id, walletType: 'CUSTOMER', balance: 1000 } });
-      const token = signAccessToken(provider);
-
-      const res = await testRequest(app)
-        .patch(`/api/complaint/${complaint.id}/complete-payment`)
-        .set('Authorization', `Bearer ${token}`)
-        .send({ method: 'WALLET' });
-
-      expect(res.status).toBe(200);
-
-      const customerWallet = await prisma.wallet.findUnique({ where: { userId: customer.id } });
-      expect(customerWallet?.balance).toBe(400); // full 600 debited from the customer
-
-      const providerWallet = await prisma.wallet.findUnique({ where: { userId: provider.id } });
-      expect(providerWallet?.balance).toBe(300); // only labour credited â€” no debit needed, company already holds the rest
-
-      const ledger = await prisma.walletLedger.findMany({ where: { walletId: providerWallet!.id } });
-      expect(ledger).toHaveLength(1);
-      expect(ledger[0]).toMatchObject({ type: 'CREDIT', amount: 300 });
-    });
-
-    it('WALLET: rejects with insufficient balance, and leaves the complaint in PAYMENT with no money moved (fixed 2026-09-07 â€” previously this was never checked at all)', async () => {
-      const customer = await createUser(Role.CUSTOMER);
-      const provider = await createUser(Role.PROVIDER);
-      const address = await createAddressFor(customer.id);
-      const complaint = await createComplaintFor(customer.id, address.id, {
-        providerId: provider.id, stage: 'PAYMENT', totalAmount: 300,
-      });
-      await prisma.wallet.create({ data: { userId: customer.id, walletType: 'CUSTOMER', balance: 50 } });
       const token = signAccessToken(provider);
 
       const res = await testRequest(app)
@@ -566,34 +543,13 @@ describe('Quote flow', () => {
         .send({ method: 'WALLET' });
 
       expect(res.status).toBe(400);
-      expect(res.body.message).toBe('Insufficient wallet balance to complete this payment');
 
       const stillPayment = await prisma.complaint.findUnique({ where: { id: complaint.id } });
       expect(stillPayment?.stage).toBe('PAYMENT');
-
       const customerWallet = await prisma.wallet.findUnique({ where: { userId: customer.id } });
-      expect(customerWallet?.balance).toBe(50);
-
+      expect(customerWallet?.balance).toBe(1000);
       const providerWallet = await prisma.wallet.findUnique({ where: { userId: provider.id } });
       expect(providerWallet).toBeNull();
-    });
-
-    it('WALLET: rejects when the customer has no wallet at all with 400', async () => {
-      const customer = await createUser(Role.CUSTOMER);
-      const provider = await createUser(Role.PROVIDER);
-      const address = await createAddressFor(customer.id);
-      const complaint = await createComplaintFor(customer.id, address.id, {
-        providerId: provider.id, stage: 'PAYMENT', totalAmount: 300,
-      });
-      const token = signAccessToken(provider);
-
-      const res = await testRequest(app)
-        .patch(`/api/complaint/${complaint.id}/complete-payment`)
-        .set('Authorization', `Bearer ${token}`)
-        .send({ method: 'WALLET' });
-
-      expect(res.status).toBe(400);
-      expect(res.body.message).toBe('Customer wallet not found');
     });
 
     it('rejects completion outside the PAYMENT stage with 400', async () => {
