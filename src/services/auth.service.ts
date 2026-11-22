@@ -20,6 +20,8 @@ const TEST_PHONES: Record<string, string> = {
   "9112345678": "123456",
   "9101234567": "123456",
   "7016301968": "123456",
+  "9824157811": "123456",
+
 };
 
 export class AuthService {
