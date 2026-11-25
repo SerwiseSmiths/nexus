@@ -1,4 +1,4 @@
-import { ComplaintStage, NotificationType, PaymentOrderStatus, PaymentProvider, Prisma, QuoteStatus, Role, WorkHistoryEvent } from '@prisma/client';
+import { ComplaintStage, NotificationEventType, NotificationType, PaymentOrderStatus, PaymentProvider, Prisma, QuoteStatus, Role, WorkHistoryEvent } from '@prisma/client';
 import type { Complaint, Quote } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import jwt from 'jsonwebtoken';
@@ -10,6 +10,7 @@ import { describeZodError } from '@/utils/zodError';
 import { withSerializableRetry } from '@/utils/serializableRetry';
 import { RealtimeService } from '@/services/realtime.service';
 import { NotificationService } from '@/services/notification.service';
+import { NotificationEventService } from '@/services/notification-event.service';
 import { TelegramService } from '@/services/telegram.service';
 import { WhatsAppService } from '@/services/whatsapp.service';
 import { WalletService } from '@/services/wallet.service';
@@ -850,7 +851,9 @@ export class ComplaintService {
     }
   }
 
-  static async acceptAssignment(complaintId: string, providerId: string) {
+  // `surface` is where the provider tapped (popup / notification / overlay) —
+  // only recorded on the notification-event funnel, never trusted for anything else.
+  static async acceptAssignment(complaintId: string, providerId: string, surface?: string) {
     const complaint = await prisma.complaint.findFirst({
       where: { id: complaintId, providerId, isDeleted: false },
     });
@@ -874,6 +877,12 @@ export class ComplaintService {
       actorRole: Role.PROVIDER,
     });
 
+    await NotificationEventService.recordServerEvent({
+      userId: providerId,
+      complaintId,
+      event:  NotificationEventType.ACCEPTED,
+      meta:   surface ? { cta: surface } : undefined,
+    });
     emit(() =>
       RealtimeService.emitProviderAccepted(updated as unknown as Record<string, unknown>),
     );
@@ -890,7 +899,7 @@ export class ComplaintService {
     return updated;
   }
 
-  static async rejectAssignment(complaintId: string, providerId: string) {
+  static async rejectAssignment(complaintId: string, providerId: string, surface?: string) {
     const complaint = await prisma.complaint.findFirst({
       where: { id: complaintId, providerId, isDeleted: false },
     });
@@ -918,6 +927,12 @@ export class ComplaintService {
       actorRole: Role.PROVIDER,
     });
 
+    await NotificationEventService.recordServerEvent({
+      userId: providerId,
+      complaintId,
+      event:  NotificationEventType.REJECTED,
+      meta:   surface ? { cta: surface } : undefined,
+    });
     emit(() =>
       RealtimeService.emitProviderRejected(updated as unknown as Record<string, unknown>),
     );
@@ -962,6 +977,30 @@ export class ComplaintService {
     return ComplaintService.issueAssignmentActionToken(complaintId, providerId);
   }
 
+  // For notification-event tracking only (NotificationEventService): native
+  // code reports "delivered / shown / timed out" with the same action token,
+  // possibly from an offline queue long after its 15-minute expiry. Reporting
+  // can't change any state, so the expiry is relaxed to `maxAgeSec` here —
+  // the signature, purpose and complaint scoping are still enforced.
+  static verifyAssignmentActionTokenForTracking(
+    token: string,
+    maxAgeSec: number,
+  ): { complaintId: string; providerId: string } {
+    let claims: { purpose?: string; complaintId?: string; providerId?: string; iat?: number };
+    try {
+      claims = jwt.verify(token, assignmentActionSecret(), { ignoreExpiration: true }) as typeof claims;
+    } catch {
+      throw new ApiError(401, 'Invalid action token');
+    }
+    if (claims.purpose !== ASSIGNMENT_ACTION_PURPOSE || !claims.complaintId || !claims.providerId) {
+      throw new ApiError(401, 'Invalid action token');
+    }
+    if (!claims.iat || Date.now() / 1000 - claims.iat > maxAgeSec) {
+      throw new ApiError(401, 'Action token too old to report events');
+    }
+    return { complaintId: claims.complaintId, providerId: claims.providerId };
+  }
+
   // Only valid while the job is still awaiting this provider's decision —
   // once accepted (or reassigned), a leaked/replayed token can't flip it.
   static async respondToAssignmentWithToken(complaintId: string, token: string, action: AssignmentAction) {
@@ -987,8 +1026,8 @@ export class ComplaintService {
     }
 
     return action === 'accept'
-      ? ComplaintService.acceptAssignment(complaintId, claims.providerId)
-      : ComplaintService.rejectAssignment(complaintId, claims.providerId);
+      ? ComplaintService.acceptAssignment(complaintId, claims.providerId, 'overlay')
+      : ComplaintService.rejectAssignment(complaintId, claims.providerId, 'overlay');
   }
 
   // ─── Quote ────────────────────────────────────────────────────────────────

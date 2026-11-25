@@ -8,6 +8,7 @@ import geocodeRoutes from './geocode.route';
 import deviceRoutes from './device.route';
 import complaintRoutes from './complaint.route';
 import notificationRoutes from './notification.route';
+import notificationEventRoutes from './notification-event.route';
 import walletRoutes from './wallet.route';
 import partsRoutes from './parts.route';
 import deviceTypesRoutes from './device-types.route';
@@ -34,6 +35,7 @@ router.use('/geocode', geocodeRoutes);
 router.use('/device', deviceRoutes);
 router.use('/complaint', complaintRoutes);
 router.use('/notification', notificationRoutes);
+router.use('/notification-events', notificationEventRoutes);  // POST /token is session-less (action token)
 router.use('/wallet', walletRoutes);
 router.use('/parts', partsRoutes);
 router.use('/device-types', deviceTypesRoutes);

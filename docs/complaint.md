@@ -119,6 +119,17 @@ The full-screen "New Job" popup in radix is only allowed to fire **live** betwee
 
 `PATCH /complaint/:id/assign` takes optional `force` (default `false` = the normal flow above). With `force: true` the job is accepted on the provider's behalf: `providerAccepted = true`, `providerAcceptedAt = now`, `assignmentPending = false`, no deadline — so §5.1's deferral and sweep never apply. The provider gets **no** `complaint:assigned` realtime event and **no** data-only `complaint_assigned` push (the two things radix's accept/reject popup/ringer key on) — instead a silent `complaint:updated` refetch plus a plain tray notification ("Job Assigned to You", skipped outside business hours). Customer notifications and the watchtower feed are the same as a normal assignment. Logged as `PROVIDER_ASSIGNED` with `metadata.forced: true` (no `PROVIDER_ACCEPTED` row — the provider didn't accept anything). `rejectAssignment` now 409s once `providerAccepted` is true, so a force-assigned provider can't decline (radix only ever calls it from the pre-accept popup, so normal flows are unaffected). Watchtower: the Reassign popover's "Normal / Force" toggle.
 
+### 5.3 Job-offer notification tracking (added 2026-11-25)
+
+Answers "did the provider's phone get the job offer, show it, did they open it, and did they accept / reject or let it ring out?" Stored as `NotificationEvent` rows (`notification-event.service.ts`), one per funnel step: `DELIVERED → DISPLAYED → OPENED → ACCEPTED | REJECTED | DISMISSED | TIMED_OUT`.
+
+- **Who writes what.** radix JS (`src/services/notificationTracking.service.ts`, MMKV-queued) and radix native Android (`jobassignment/JobAssignmentTracking.kt`, SharedPreferences-queued) report delivered / shown / opened / dismissed / timed-out. **ACCEPTED / REJECTED are only ever written by nexus**, inline in `acceptAssignment` / `rejectAssignment` (`recordServerEvent`, never throws) — clients can't report them (400). `PATCH /:id/accept` and `/:id/reject-assignment` take an optional `{ surface: 'popup' | 'notification' }` body; the token path (`respondToAssignmentWithToken`) records `overlay`. It is stored only as `meta.cta`.
+- **Endpoints** (`/notification-events`): `POST /` (session), `POST /token` (session-less, the assignment action token; accepted up to **24h** after issue via `verifyAssignmentActionTokenForTracking`, so offline-queued native reports still land, and events for any other complaint are dropped), `GET /admin/notifications` and `GET /admin/events` (ADMIN, watchtower `/notifications`). Admin output strips `metadata.actionToken`.
+- **Linking to a push.** An event with `notificationId` (the FCM path) must belong to the caller. Events with only `complaintId` (the socket path and out-of-hours pending claims carry no notificationId) are matched to the latest `complaint_assigned` push for that provider + complaint sent within 30 minutes before the event. No match gives `notificationId: null`: still tied to the ticket, and shown in watchtower as "not tied to a push".
+- **Dedup.** `@@unique([notificationId, event])`, so the first report of each step per push wins (native + notifee + socket all fire for one job). Unlinked rows are deduped in code within the same 30-minute window.
+- **Device clock.** `occurredAt` is the phone's clock, clamped to now if it is >5 min in the future or >7 days old. `createdAt` is when nexus received it.
+- **Limits.** DISPLAYED is not proof of being seen: native DELIVERED/DISPLAYED carry `meta.screenOn` / `meta.locked` as the best proxy. iOS has no native ringer, so expect mostly OPENED + server events there. Providers on an app build without this tracking produce no device events at all (watchtower: "No device report").
+
 ## 6. Quote Flow
 
 `Quote` is 1:1 with `Complaint` (unique `complaintId`). `addQuote` (assigned provider, **or ADMIN acting on the provider's behalf — added 2026-09-13, see §6.1**; must be `QR_VALIDATED`/`ESTIMATION`) upserts the quote, computes `totalAmount` from line items, force-advances the complaint to `APPROVAL`.
@@ -298,6 +309,7 @@ Realtime/Notification/Telegram services are mocked in every complaint test file 
 | `entry-qr.test.ts` | Generate/validate/request-scan, expiry, wrong token, stage guards, ownership |
 | `device-link-reopen.test.ts` | `linkDevice` ownership (provider/customer/admin paths), the reopen-triggers-auto-assign fix, reopen stage guard |
 | `read-delete.test.ts` | `getById`/`myComplaints`/`assignedComplaints`/admin `listComplaints`/`deleteComplaint`, the 403→404 standardization |
+| `notification-events.test.ts` | §5.3: per-step dedup, complaint-only events matched to the assignment push, foreign-notification rejection, token endpoint scoping, client ACCEPTED refused + server-recorded ACCEPTED with `cta`, admin funnel/outcome filter/token stripping/role gate |
 
 ### 12.3 What's not covered
 - No load/concurrency test for two simultaneous `complete-payment` calls on the same complaint (the `Serializable` isolation should prevent a double-charge, but this isn't explicitly tested).
@@ -329,6 +341,8 @@ src/tests/dbHelpers.ts                  — resetAllTestTables, extended for Quo
 ---
 
 ## 14. Change Log
+
+- **2026-11-25** — Job-offer notification tracking (§5.3): new `NotificationEvent` model + migration `20261125120000_add_notification_event`, `/notification-events` routes, ACCEPTED/REJECTED recorded inline in `acceptAssignment`/`rejectAssignment` (optional `surface` body), radix JS + native reporters, watchtower `/notifications` page plus "Notification events" on tickets, customers and providers. The test DB reset now clears `NotificationEvent` and `Notification` first.
 
 - **2026-11-08** — Fixes from the payment e2e suite (`e2e/`, `PAYMENT_AUDIT_TODO.md` §E):
   - `settlePayment`'s Serializable transaction is retried on a serialization conflict (P2034, `utils/serializableRetry.ts`). Before, a concurrent write to the complaint made a paid UPI QR permanently FAILED (E2). A retry that loses the stage claim gets the normal "already been paid" 409, which is also what a second admin recording cash now sees.

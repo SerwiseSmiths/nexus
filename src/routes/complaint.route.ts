@@ -243,6 +243,14 @@ router.patch('/:id/assign', auth, authorize([Role.ADMIN]), ComplaintController.a
  *       - bearerAuth: []
  *     parameters:
  *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               surface: { type: string, enum: [popup, notification], description: 'Where the provider tapped — recorded on the notification-event funnel only' }
  *     responses:
  *       200: { description: Assignment accepted }
  */
@@ -258,6 +266,14 @@ router.patch('/:id/accept', auth, authorize([Role.PROVIDER]), ComplaintControlle
  *       - bearerAuth: []
  *     parameters:
  *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               surface: { type: string, enum: [popup, notification], description: 'Where the provider tapped — recorded on the notification-event funnel only' }
  *     responses:
  *       200: { description: Assignment rejected }
  */

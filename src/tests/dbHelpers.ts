@@ -28,6 +28,10 @@ export async function seedDeviceTypeGroups() {
 // is re-seeded after every reset so every test starts with the standard
 // one-group-per-type set.
 export async function resetAllTestTables() {
+  // NotificationEvent references Notification, Complaint and User — clear it
+  // (and Notification, which references Complaint + User) first.
+  await prisma.notificationEvent.deleteMany({});
+  await prisma.notification.deleteMany({});
   await prisma.paymentOrder.deleteMany({});
   await prisma.paymentSession.deleteMany({});
   await prisma.payoutRequest.deleteMany({});

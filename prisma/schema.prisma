@@ -139,6 +139,25 @@ enum NotificationStatus {
   FAILED
 }
 
+// Funnel steps for NotificationEvent, in the order they normally happen.
+enum NotificationEventType {
+  DELIVERED   // the device received the push
+  DISPLAYED   // a notification / ringer / popup was put on screen
+  OPENED      // the recipient tapped it (body, View, Accept button, or the in-app popup appeared from a tap)
+  ACCEPTED    // job accepted (recorded by nexus)
+  REJECTED    // job rejected (recorded by nexus)
+  DISMISSED   // swiped away / closed without acting
+  TIMED_OUT   // rang until the ring timeout with no response
+}
+
+// Which code path reported a NotificationEvent.
+enum NotificationEventSource {
+  NATIVE   // radix's Kotlin receiver / ringer service / floating overlay
+  NOTIFEE  // radix's JS fallback notification (app backgrounded/killed)
+  APP      // radix's JS while running (foreground push, socket, in-app popup)
+  SERVER   // nexus itself (accept / reject endpoints)
+}
+
 enum DevicePlatform {
   ANDROID
   IOS
@@ -176,6 +195,7 @@ model User {
   complaintsAsProvider Complaint[]      @relation("ProviderComplaints")
   // Notification relations
   notifications        Notification[]
+  notificationEvents   NotificationEvent[]
   deviceTokens         DeviceToken[]
   // Wallet relations
   wallet               Wallet?
@@ -431,8 +451,9 @@ model Complaint {
   subscription  Subscription?    @relation(fields: [subscriptionId], references: [id])
   media         ComplaintMedia[]
   quote         Quote?
-  notifications Notification[]
-  logs          ComplaintLog[]
+  notifications      Notification[]
+  notificationEvents NotificationEvent[]
+  logs               ComplaintLog[]
 
   isDeleted Boolean  @default(false)
   createdAt DateTime @default(now())
@@ -563,9 +584,49 @@ model Notification {
   isDeleted   Boolean            @default(false)
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
+  // Delivery / engagement funnel reported by the device (and accept/reject
+  // recorded by nexus itself) — see NotificationEventService.
+  events      NotificationEvent[]
 
   @@index([userId, isDeleted])
   @@index([complaintId])
+}
+
+// One step of what happened to a push after nexus handed it to FCM: did the
+// phone receive it, show it, did the recipient open it, act on it, swipe it
+// away or let it time out. Written by the radix app (JS + the native Android
+// ringer/overlay) and by nexus for the authoritative accept/reject.
+//
+// notificationId is null when the device couldn't name the push (the
+// realtime-socket delivery path carries no notificationId) and nexus couldn't
+// match the event to one either — complaintId still ties it to the ticket.
+// @@unique([notificationId, event]) keeps the first report of each step per
+// push (the same job can reach the phone via native, notifee and socket);
+// Postgres treats NULLs as distinct, so unmatched rows are deduped in code.
+model NotificationEvent {
+  id             String                  @id @default(uuid())
+  notificationId String?
+  notification   Notification?           @relation(fields: [notificationId], references: [id])
+  userId         String
+  user           User                    @relation(fields: [userId], references: [id])
+  complaintId    String?
+  complaint      Complaint?              @relation(fields: [complaintId], references: [id])
+  event          NotificationEventType
+  source         NotificationEventSource
+  // Extra detail, e.g. { cta: 'accept' | 'view' | 'body' | 'overlay' }, appState.
+  meta           Json?
+  // Device clock at the moment it happened (clamped server-side) — createdAt
+  // is when nexus received the report, which can be much later if it was
+  // queued offline.
+  occurredAt     DateTime
+  isDeleted      Boolean                 @default(false)
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  @@unique([notificationId, event])
+  @@index([userId, occurredAt(sort: Desc)])
+  @@index([complaintId])
+  @@index([event, occurredAt(sort: Desc)])
 }
 
 // ─── Wallet Models ────────────────────────────────────────────────────────────

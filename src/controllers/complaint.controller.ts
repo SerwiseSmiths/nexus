@@ -17,6 +17,16 @@ import {
   RecordCashPaymentSchema,
 } from '@/types/complaint.types';
 
+// Where the provider tapped Accept/Reject — optional, analytics-only (see
+// NotificationEventService). Unknown values are dropped rather than stored.
+const ASSIGNMENT_SURFACES = ['popup', 'notification'] as const;
+function parseSurface(body: unknown): string | undefined {
+  const surface = (body as { surface?: unknown } | undefined)?.surface;
+  return typeof surface === 'string' && (ASSIGNMENT_SURFACES as readonly string[]).includes(surface)
+    ? surface
+    : undefined;
+}
+
 export class ComplaintController {
   // ─── CRUD ─────────────────────────────────────────────────────────────────
 
@@ -142,7 +152,11 @@ export class ComplaintController {
 
   static async acceptAssignment(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const complaint = await ComplaintService.acceptAssignment(req.params.id as string, req.user!.id);
+      const complaint = await ComplaintService.acceptAssignment(
+        req.params.id as string,
+        req.user!.id,
+        parseSurface(req.body),
+      );
       return ApiResponse.success(res, 200, 'Assignment accepted', { complaint });
     } catch (error) {
       next(error);
@@ -151,7 +165,11 @@ export class ComplaintController {
 
   static async rejectAssignment(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const complaint = await ComplaintService.rejectAssignment(req.params.id as string, req.user!.id);
+      const complaint = await ComplaintService.rejectAssignment(
+        req.params.id as string,
+        req.user!.id,
+        parseSurface(req.body),
+      );
       return ApiResponse.success(res, 200, 'Assignment rejected', { complaint });
     } catch (error) {
       next(error);
